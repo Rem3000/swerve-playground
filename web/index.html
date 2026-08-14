@@ -25,9 +25,13 @@
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none}
+  /* dvh 才吃得到 iOS Safari 會縮放的網址列／工具列，不然底部按鈕會被蓋住 */
+  body{height:100dvh}
   body{
     background:var(--bg);color:var(--fg);
     font-family:-apple-system,"Noto Sans TC","Microsoft JhengHei",sans-serif;
+    /* iOS 會自作主張放大直向頁面的字，關掉，不然讀值列會撐破版面 */
+    -webkit-text-size-adjust:100%;text-size-adjust:100%;
     display:flex;flex-direction:column;
     padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
     user-select:none;-webkit-user-select:none;
@@ -47,19 +51,26 @@
   #view{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
 
   /* ---------- 模組讀值 ---------- */
-  #mods{flex:0 0 auto;display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:8px}
-  .m{background:var(--panel);border:1px solid var(--edge);border-radius:8px;padding:5px 4px;text-align:center}
+  /* minmax(0,1fr) 而不是 1fr：等寬欄的最小寬度預設是內容寬度，
+     字一長就把整列撐出畫面，最右邊那格（RR）會被推出去看不到 */
+  #mods{flex:0 0 auto;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;padding:8px}
+  .m{background:var(--panel);border:1px solid var(--edge);border-radius:8px;padding:5px 3px;
+     text-align:center;overflow:hidden}
   .m b{display:block;font-size:11px;color:var(--dim);letter-spacing:.5px}
   .m .a{display:block;font:600 15px/1.25 ui-monospace,Menlo,Consolas,monospace}
-  .m .c{display:block;font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;color:var(--dim);
+  .m .c{display:block;font:10px/1.3 ui-monospace,Menlo,Consolas,monospace;color:var(--dim);
         white-space:nowrap}
 
   /* ---------- 操控區 ---------- */
-  #ctrl{flex:0 0 auto;display:grid;grid-template-columns:1fr auto;gap:10px;padding:0 10px 10px;align-items:end}
-  #pad{width:100%;aspect-ratio:1;max-width:190px;touch-action:none;
+  /* 搖桿放右邊，右手拇指剛好落在上面。
+     搖桿那一欄用 auto（尺寸自己說了算），左邊那欄用 minmax(0,1fr) 可以被壓縮；
+     反過來寫的話左欄會把搖桿擠成一個小點。 */
+  #ctrl{flex:0 0 auto;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;
+        padding:0 10px 10px;align-items:end}
+  #pad{width:min(44vw,200px);aspect-ratio:1;touch-action:none;
        background:var(--panel);border:1px solid var(--edge);border-radius:50%}
-  #side{display:flex;flex-direction:column;gap:8px;align-items:stretch;min-width:132px}
-  #spin{width:100%;height:56px;touch-action:none;
+  #side{display:flex;flex-direction:column;justify-content:flex-end;gap:8px;min-width:0}
+  #spin{width:100%;height:52px;touch-action:none;
         background:var(--panel);border:1px solid var(--edge);border-radius:10px}
   .row{display:flex;gap:8px}
   button{
@@ -70,7 +81,7 @@
   button:active{background:#222833}
   #estop{background:#3d1417;border-color:#7a2226;color:#ff9ea1;font-size:15px;padding:14px 6px}
   #estop.on{background:var(--red);color:#fff;border-color:#ff8a8d}
-  #scale{min-width:64px;flex:0 0 auto}
+  #scale{flex:0 0 auto;min-width:56px}
 
   /* ---------- 載入畫面 ---------- */
   #boot{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;
@@ -93,7 +104,6 @@
 <div id="mods"></div>
 
 <div id="ctrl">
-  <canvas id="pad"></canvas>
   <div id="side">
     <canvas id="spin"></canvas>
     <div class="row">
@@ -102,6 +112,7 @@
     </div>
     <button id="estop">急停</button>
   </div>
+  <canvas id="pad"></canvas>
 </div>
 
 <div id="boot">
@@ -493,7 +504,9 @@ function bindPad(el, onMove, onEnd) {
   el.addEventListener("pointerdown", e => {
     if (id !== null) return;
     id = e.pointerId;
-    el.setPointerCapture(id);
+    // 手指滑出元件外還要繼續追蹤。抓不到就算了（有些瀏覽器會丟例外），
+    // 不能讓它把後面的 onMove 一起帶走，否則整個搖桿變成沒反應
+    try { el.setPointerCapture(id); } catch (err) { /* 沒有 capture 也還能用 */ }
     onMove(...pos(e));
     e.preventDefault();
   });

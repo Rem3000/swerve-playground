@@ -39,8 +39,10 @@ STEER_ANGLE_MARGIN_DEG = 3.0
 # 主動避開限位開關：挑解時把窗口收緊成 [3+30, 267-30]，硬性排除靠近開關的解
 STEER_KEEPOUT_DEG = 30.0
 
-# 朝內對稱安裝：機械角度 0 度時，輪子在車體座標下指向的方向
-MOUNT_OFFSET_DEG = (-45.0, -135.0, 45.0, 135.0)
+# 機械角度 0 度（撞塊壓住 0 度開關）時，輪子在車體座標下指向的方向。
+# FL 朝車尾、FR 朝左、RL 朝右、RR 朝車頭 —— 四個模組繞車體中心 90 度陣列的
+# 同一種裝法，所以這四個值也是 90 度一階。由開關位置與撞塊偏移推出，見下。
+MOUNT_OFFSET_DEG = (-180.0, 90.0, -90.0, 0.0)
 
 # ---------------------------------------------------------------- 限位機構幾何
 # 這一段完全不進入任何運算。機械角度的刻度（0 = 碰到 min 開關、270 = 碰到 max
@@ -56,15 +58,20 @@ MOUNT_OFFSET_DEG = (-45.0, -135.0, 45.0, 135.0)
 #   min 開關 = 撞塊在機械 0 度時的位置
 #   max 開關 = 撞塊在機械 270 度時的位置
 #
-# 用實車俯視圖量到的開關角度反推，四個模組的 STRIKER_OFFSET 都是 -45（唯一解）：
-#   FL(offset -45) ：min = 0+(-45)+(-45) = -90，max = 270+(-45)+(-45) = 180  ✓
-#   FR(offset -135)：min = 180，max = -90   ✓
-#   RL(offset +45) ：min = 0，max = -90     ✓  （量到的是 {-90, 0}）
-#   RR(offset +135)：min = 90，max = 0      ✓  （量到的是 {0, 90}）
+# 這三個量只有兩個自由度，挑兩個當已知第三個就被決定了。這裡的已知是：
+#   (a) 開關位置 —— 實車俯視圖量到的，是外部事實
+#   (b) STRIKER_OFFSET = +90 —— 撞塊銷相對輪子朝向的角度差，CAD 對圖確認
+#       （銷裝在輪叉側面，所以差 90 度），四個模組同值
+# 被決定的是 MOUNT_OFFSET（上面那組），四組都對得上量到的開關位置：
+#   FL(offset -180)：min = 0+(-180)+90 = -90，max = 270+(-180)+90 = 180  ✓
+#   FR(offset  +90)：min = 180，max = 90    ✓
+#   RL(offset  -90)：min = 0，  max = -90   ✓
+#   RR(offset    0)：min = 90， max = 0     ✓
 #
-# 附帶一個可以拿來佐證的性質：這樣算出來，每個模組那 90 度的死角剛好朝向
-# 車體中心，正是開關裝在內側的必然結果。
-STRIKER_OFFSET_DEG = (-45.0, -45.0, -45.0, -45.0)
+# 附帶一個可以拿來佐證的性質：每個模組那 90 度的死角剛好朝向車體中心，正是
+# 開關裝在內側的必然結果。死角是開關位置決定的，換句話說這個佐證只驗 (a)，
+# 改 STRIKER_OFFSET 不會動到它。
+STRIKER_OFFSET_DEG = (90.0, 90.0, 90.0, 90.0)
 
 
 def striker_body_deg(i, mech_deg):
@@ -91,7 +98,7 @@ STEER_HOMING_PARK_DEG = 135.0 # 校正完停在行程正中間
 # MD36 P71 24V + 霍爾編碼盤 13 ppr，外加迴轉盤齒圈那一級
 STEER_ENCODER_PPR = 13.0
 STEER_MOTOR_GEARBOX = 71.0
-STEER_RING_STAGE = 4.5        # TODO: 小齒輪 -> 齒圈 的齒數比，實車數齒數
+STEER_RING_STAGE = 9.0        # 齒圈 144 齒 / 小齒輪 16 齒（實車數過）
 STEER_GEAR_RATIO = STEER_MOTOR_GEARBOX * STEER_RING_STAGE
 # 韌體開機時用的「估算」刻度。歸零碰到第二顆開關後會用實測值覆寫掉。
 STEER_TICKS_PER_DEG_NOMINAL = STEER_ENCODER_PPR * 4.0 * STEER_GEAR_RATIO / 360.0
@@ -524,8 +531,13 @@ class SteerBoardModule:
 
     # ------------------------------------------------------------ 物理
     def _enc_ticks(self):
-        """編碼器讀數。注意是馬達側位置乘上『真實』刻度，韌體不知道這個值。"""
-        return self.motor_deg * HW_TICKS_PER_DEG
+        """編碼器讀數。注意是馬達側位置乘上『真實』刻度，韌體不知道這個值。
+
+        PCNT 是硬體計數器，只吐整數（韌體那邊 enc_.getTicks() 回傳 int32），
+        所以這裡要量化。少了它模擬出來的歸零精度會比實車樂觀約 1 tick
+        （1/48 度 ≈ 0.02 度），test_homing 報到小數第三位就變成假精度。
+        """
+        return float(math.floor(self.motor_deg * HW_TICKS_PER_DEG))
 
     @property
     def limit_clearance_deg(self):
@@ -588,7 +600,10 @@ class SteerBoardModule:
         if age_ms < 0.0 or age_ms > 500.0:
             return raw
         back_deg = self.rate_dps_est * (age_ms * 1e-3)
-        return raw - back_deg * self.ticks_per_deg
+        # 對應韌體的 (int32_t)lroundf(back_deg * ticks_per_deg_)：
+        # 補償量也是整數 tick，四捨五入且遠離零（lroundf 的語意）
+        v = back_deg * self.ticks_per_deg
+        return raw - (math.floor(v + 0.5) if v >= 0.0 else math.ceil(v - 0.5))
 
     def _drive(self, pwm):
         """對應 SteerModule::drive()：壓到開關就不准再往那個方向出力"""
@@ -873,7 +888,9 @@ class SteerBoardModule:
                     out *= (room / STEER_SOFT_LIMIT_DEG) if room > 0.0 else 0.0
                     self.soft_limited = True
 
-        self._drive(out)
+        # 對應韌體的 drive((int)out)：ledcWrite 吃的是整數，往零截斷。
+        # 軟限位把出力壓到 0~1 之間時，實車是完全不動的，這裡不取整會多爬一點。
+        self._drive(float(int(out)))
 
 
 # ============================================================================
@@ -925,6 +942,9 @@ class SwerveRobot:
         self._next_control = 0.0
         self._next_report = 0.0
         self._next_odom = 0.0
+
+        # 轉向板 READY 的邊沿偵測，對應 bot.cpp 的 steer_ready_prev
+        self._steer_ready_prev = False
 
         # ---- 急停（對應 bot.cpp 的 loop_bot_estop）----
         self.estop_switch = False      # 實體開關現在有沒有被按下（測試直接設它）
@@ -1003,6 +1023,7 @@ class SwerveRobot:
             m.start_homing()
         self.kin.reset_odom()
         self.kin.seeded = False
+        self._steer_ready_prev = False
         self.reported_deg = [m.angle_deg for m in self.steer]
         self.true_pose = [0.0, 0.0, 0.0]
         self.wheel_act_mps = [0.0] * N
@@ -1028,6 +1049,7 @@ class SwerveRobot:
             m.__init__(STEER_HOMING_PARK_DEG)
         self.kin.reset_odom()
         self.kin.seeded = False
+        self._steer_ready_prev = False
         self.reported_deg = [m.angle_deg for m in self.steer]
         self.true_pose = [0.0, 0.0, 0.0]
         self.wheel_act_mps = [0.0] * N
@@ -1057,6 +1079,15 @@ class SwerveRobot:
         # 急停走同一條路：速度歸零之後逆運動學會沿用上一次的角度，輪子自然凍結。
         if not self.ready or self.estop_latched:
             vx = vy = wz = 0.0
+
+        # ---- 轉向板剛歸零完成：把「上次角度」對齊它現在停的地方 ----
+        # 對應 bot.cpp loop_bot_control() 的 1.5 步。沒有這一段的話，
+        # inverse() 內部那次 seed 會停在「開機當下」的角度（歸零都還沒開始），
+        # 零速時走的又是「沿用上一次角度」的捷徑、不經過 resolve_angle()，
+        # 於是歸零完成停在 park 的輪子會被一路拉回開機角度貼著限位開關。
+        if self.ready and not self._steer_ready_prev:
+            self.kin.seed_angles(self.reported_deg)
+        self._steer_ready_prev = self.ready
 
         # ---- 逆運動學（用轉向板回報的角度挑最省力的解）----
         states = self.kin.inverse(vx, vy, wz, self.reported_deg)

@@ -89,9 +89,23 @@ M.STEER_HOMING_SLOW_PWM = saved
 fast_worst = max(abs(m.home_error_deg) for m in bot_fast.steer)
 print(f"        只快速撞一次：最大誤差 {fast_worst:.3f}°")
 print(f"        二次逼近    ：最大誤差 {worst:.3f}°")
-check(bot_fast.homing_done, "關掉二次逼近也還是能完成（只是比較不準）")
-check(worst < fast_worst,
-      f"二次逼近比較準（{worst:.3f}° < {fast_worst:.3f}°）")
+check(bot_fast.homing_done, "關掉二次逼近也還是能完成")
+
+# ⚠ 這一項故意只驗「不會更糟」，不驗「一定更準」。
+#
+# 二次逼近在實車上的主要價值是**重複性**：快速撞上去的瞬間列印件會被壓變形、
+# 齒隙被吃掉，讀到的位置每次都不一樣（steer_config.h 的註解就是這樣寫的）。
+# 那個效應模擬器沒有建 —— 這裡只有齒隙與硬擋塊，沒有「撞擊力道 -> 變形」。
+#
+# 模擬器唯一能反映的好處是「速度慢 -> 訊號延遲換算的角度小」，而那一段已經被
+# 延遲補償扣掉了（見第 5 項）。減速比從猜的 4.5 改成實測的 9.0 之後，快速逼近
+# 本身也只剩 26 度/秒，兩者都落在補償能力之內，差異就掉進齒隙的雜訊裡了。
+#
+# 所以這裡驗的是「開著它不會讓事情變糟」。真要評估它值不值得，得上實車量
+# 重複性（同一顆模組連續歸零十次，看零點散佈），模擬器給不出那個答案。
+check(worst <= fast_worst + 0.05,
+      f"二次逼近沒有讓精度變糟（{worst:.3f}° vs 只撞一次 {fast_worst:.3f}°，"
+      f"差異在齒隙雜訊內）")
 
 # ---------------------------------------------------------------- 5
 print("\n[5] 開關走 CAN 的延遲補償有沒有用（關掉來對照）")
@@ -173,6 +187,29 @@ check(bot2.ready, "歸零完成後進入 READY")
 check(err / max(dist, 1e-9) < 0.05, "里程計誤差 < 行走距離的 5%")
 lateral = abs(bot2.true_pose[1])
 print(f"        橫向偏移 {lateral * 100:.2f} cm（歸零誤差造成的『走不直』）")
+
+# ---------------------------------------------------------------- 9
+print("\n[9] 歸零完成後沒人下指令，輪子要留在 park 不可以自己跑掉")
+# 迴歸測試。曾經發生過：inverse() 內部的 seed 只在第一次呼叫時做，而那一刻
+# （開機 +20 ms）轉向板還沒開始歸零、回報角度接近 0，last_angle_deg_ 就被
+# seed 成 constrain(0, 3, 267) = 3 度。零速時 inverse() 走「沿用上一次角度」
+# 的捷徑、不經過 resolve_angle()，keep-out 完全沒有機會介入，於是歸零完成
+# 停在 park 的輪子會被一路拉回開機當下的角度，最靠近的那顆只離開關 3.8 度。
+# 修法是在 READY 的邊沿重新 seed（bot.cpp loop_bot_control() 的 1.5 步）。
+bot3 = SwerveRobot()
+bot3.start_homing(START)          # 起點含 269.5 與 0.2 兩個貼著開關的
+run_homing(bot3)
+check(bot3.ready, "先確認有進 READY（不然下面測不到東西）")
+for _ in range(int(5.0 * 200)):   # /cmd_vel 完全不下，維持零速 5 秒
+    bot3.step(1 / 200)
+park_err = max(abs(m.angle_deg - M.STEER_HOMING_PARK_DEG) for m in bot3.steer)
+clear = min(m.limit_clearance_deg for m in bot3.steer)
+print(f"        零速 5 秒後：{[f'{m.angle_deg:.1f}' for m in bot3.steer]}"
+      f"（park {M.STEER_HOMING_PARK_DEG:.0f}°）")
+print(f"        最小 clearance {clear:.1f}°")
+check(park_err < 2.0, f"四顆都還在 park 附近，最大偏離 {park_err:.2f}° < 2°")
+check(clear >= M.STEER_KEEPOUT_DEG,
+      f"最小 clearance {clear:.1f}° >= keep-out {M.STEER_KEEPOUT_DEG:.0f}°")
 
 # ---------------------------------------------------------------- 總結
 print("\n" + "=" * 64)

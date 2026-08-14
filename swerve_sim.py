@@ -333,7 +333,7 @@ class SwerveSim(tk.Tk):
         vx, vy, wz = b.cmd
         c.create_text(14, 20, text="Swerve 底盤模擬器", fill=FG, font=F_BIG, anchor="w")
         c.create_text(14, 44, anchor="w", fill=DIM, font=F_SM,
-                      text="驗證「朝內對稱安裝」的偏移角轉換：機械角 ↔ 車體角")
+                      text="驗證「繞中心 90° 陣列安裝」的偏移角轉換：機械角 ↔ 車體角")
 
         info = (f"cmd  vx={vx:+.2f}  vy={vy:+.2f}  wz={wz:+.2f}      "
                 f"倍率 {self.speed_scale:.1f}      {self.fps:4.0f} fps")

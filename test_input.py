@@ -6,7 +6,7 @@
 import sys
 import time
 
-from swerve_model import MAX_LINEAR_SPEED_MPS, MAX_ANGULAR_SPEED_RPS
+from swerve_model import MAX_LINEAR_SPEED_MPS, MAX_ANGULAR_SPEED_RPS, MOUNT_OFFSET_DEG
 import swerve_sim
 
 fails = []
@@ -102,10 +102,10 @@ app.speed_scale = 1.0
 
 print("\n[7] 功能鍵")
 app.event_generate("<KeyPress-m>", when="now"); app.update()
-check(app.miscal and abs(app.bot.physical_offset_deg[0] - (-45.0 + 15.0)) < 1e-9,
+check(app.miscal and abs(app.bot.physical_offset_deg[0] - (MOUNT_OFFSET_DEG[0] + 15.0)) < 1e-9,
       "M 注入 FL +15 度校正誤差")
 app.event_generate("<KeyPress-m>", when="now"); app.update()
-check(not app.miscal and abs(app.bot.physical_offset_deg[0] - (-45.0)) < 1e-9,
+check(not app.miscal and abs(app.bot.physical_offset_deg[0] - MOUNT_OFFSET_DEG[0]) < 1e-9,
       "再按一次 M 復原")
 app.event_generate("<KeyPress-p>", when="now"); app.update()
 check(app.paused, "P 暫停")

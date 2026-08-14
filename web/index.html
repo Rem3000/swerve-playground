@@ -55,7 +55,6 @@
   #viewbtns button{flex:0 0 auto;font-size:12px;font-weight:600;padding:6px 12px;
                    background:#1e242c;border-color:#39414d;opacity:.92}
   #viewbtns button.hide{display:none}
-  #viewbtns button.on{background:#3a2c10;border-color:#7a5a1c;color:var(--orange)}
 
   /* ---------- 模組讀值 ---------- */
   /* minmax(0,1fr) 而不是 1fr：等寬欄的最小寬度預設是內容寬度，
@@ -110,8 +109,7 @@
   <canvas id="view"></canvas>
   <div id="viewbtns">
     <button id="mode">路徑</button>
-    <button id="clr" class="hide">清除</button>
-    <button id="odom" class="hide">里程計</button>
+    <button id="clr" class="hide">清除軌跡</button>
   </div>
 </div>
 
@@ -195,6 +193,7 @@ def step(dt, vx, vy, wz, estop):
         mods=mods,
         vel=bot.true_vel,
         pose=bot.true_pose,
+        # 網頁目前不畫里程計那條，但它是模型的一級輸出，留在介面裡
         odom=[o['x'], o['y'], o['yaw']],
         odom_err=bot.odom_error(),
         clr=bot.clearance_now(),
@@ -222,7 +221,6 @@ const DEG = Math.PI / 180;
 const cmd = { vx: 0, vy: 0, wz: 0 };   // 由觸控填，單位是模型的 m/s 與 rad/s
 let scale = 0.6;                        // 速度倍率
 let view = "chassis";                   // 主視圖：chassis 底盤 / world 路徑
-let showOdom = false;                   // 路徑視圖要不要疊上里程計推算的那條
 let estop = false;
 let pad = { x: 0, y: 0, live: false };  // 搖桿位移（-1~1，畫面座標）
 let spin = { v: 0, live: false };       // 自轉條（-1~1）
@@ -297,22 +295,18 @@ function frame(now) {
    在這邊自己累積就好。這是純顯示用的資料，不是韌體公式，不涉及那條
    「模型只有一份」的規矩。 */
 const TRAIL_STEP_M = 0.01, TRAIL_MAX = 4000;
-const trail = { real: [], odom: [] };
+const trail = [];
 
 function pushTrail(s) {
-  const add = (arr, x, y) => {
-    const last = arr[arr.length - 1];
-    if (last && Math.hypot(x - last[0], y - last[1]) <= TRAIL_STEP_M) return;
-    arr.push([x, y]);
-    if (arr.length > TRAIL_MAX) arr.shift();
-  };
-  add(trail.real, s.pose[0], s.pose[1]);
-  add(trail.odom, s.odom[0], s.odom[1]);
+  const [x, y] = s.pose;
+  const last = trail[trail.length - 1];
+  if (last && Math.hypot(x - last[0], y - last[1]) <= TRAIL_STEP_M) return;
+  trail.push([x, y]);
+  if (trail.length > TRAIL_MAX) trail.shift();
 }
 
 function clearTrail() {
-  trail.real.length = 0;
-  trail.odom.length = 0;
+  trail.length = 0;
 }
 
 function resolveCmd() {
@@ -445,21 +439,16 @@ function drawView(s) {
 }
 
 /* -------------------------------------------------------------- 畫面：路徑
-   綠 = 車子真正走的軌跡，橘 = 里程計以為自己走的軌跡。
-   兩條分岔多遠，就是里程計飄掉多少 —— 這是這個視圖唯一想講的事。 */
+   車子真正走過的軌跡。 */
 function drawWorld(s) {
   const { ctx, w, h } = fitCanvas($("view"));
   ctx.clearRect(0, 0, w, h);
 
-  // 手機上沒有滾輪可以縮放，改成把要顯示的軌跡與車子整個框進畫面。
-  // 關掉里程計時它那條就不列入計算，否則視野會被一條看不見的線撐大
-  const shown = showOdom ? [trail.real, trail.odom] : [trail.real];
+  // 手機上沒有滾輪可以縮放，改成把整條軌跡與車子都框進畫面
   let x0 = s.pose[0], x1 = x0, y0 = s.pose[1], y1 = y0;
-  for (const arr of shown) {
-    for (const p of arr) {
-      if (p[0] < x0) x0 = p[0]; else if (p[0] > x1) x1 = p[0];
-      if (p[1] < y0) y0 = p[1]; else if (p[1] > y1) y1 = p[1];
-    }
+  for (const p of trail) {
+    if (p[0] < x0) x0 = p[0]; else if (p[0] > x1) x1 = p[0];
+    if (p[1] < y0) y0 = p[1]; else if (p[1] > y1) y1 = p[1];
   }
   const MARGIN = 0.35;                       // 車身一半再加一點留白
   const S = Math.max(16, Math.min(300,
@@ -487,21 +476,17 @@ function drawWorld(s) {
   // 軌跡。點數會隨行走距離一直長，依縮放抽點 —— 螢幕上間距不到 2 px 的
   // 點畫了也看不出差別，卻會讓每一幀都變慢
   const keep = Math.max(1, Math.round(2 / (TRAIL_STEP_M * S)));
-  const lines = showOdom ? [[trail.real, "#4ec97a"], [trail.odom, "#e8a33d"]]
-                         : [[trail.real, "#4ec97a"]];
-  for (const [arr, col] of lines) {
-    if (arr.length < 2) continue;
-    ctx.strokeStyle = col;
+  if (trail.length >= 2) {
+    ctx.strokeStyle = "#4ec97a";
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(...w2s(arr[0][0], arr[0][1]));
-    for (let i = keep; i < arr.length; i += keep) ctx.lineTo(...w2s(arr[i][0], arr[i][1]));
-    ctx.lineTo(...w2s(arr[arr.length - 1][0], arr[arr.length - 1][1]));
+    ctx.moveTo(...w2s(trail[0][0], trail[0][1]));
+    for (let i = keep; i < trail.length; i += keep) ctx.lineTo(...w2s(trail[i][0], trail[i][1]));
+    ctx.lineTo(...w2s(trail[trail.length - 1][0], trail[trail.length - 1][1]));
     ctx.stroke();
   }
 
-  if (showOdom) drawBody(ctx, w2s, S, s.odom[0], s.odom[1], s.odom[2], "#e8a33d", null);
-  drawBody(ctx, w2s, S, s.pose[0], s.pose[1], s.pose[2], "#4ec97a", s);
+  drawBody(ctx, w2s, S, s);
 
   // 比例尺
   ctx.strokeStyle = "#8b95a4";
@@ -514,30 +499,21 @@ function drawWorld(s) {
   ctx.textAlign = "left";
   ctx.fillText(G + " m", 14, h - 22);
 
-  // 真實 vs 里程計
   ctx.textAlign = "right";
   ctx.fillStyle = "#4ec97a";
-  ctx.fillText(`真實 ${s.pose[0].toFixed(2)} ${s.pose[1].toFixed(2)} `
+  ctx.fillText(`x ${s.pose[0].toFixed(2)}  y ${s.pose[1].toFixed(2)}  `
              + `${(s.pose[2] * 180 / Math.PI).toFixed(0)}°`, w - 10, 22);
-  if (showOdom) {
-    ctx.fillStyle = "#e8a33d";
-    ctx.fillText(`里程 ${s.odom[0].toFixed(2)} ${s.odom[1].toFixed(2)} `
-               + `${(s.odom[2] * 180 / Math.PI).toFixed(0)}°`, w - 10, 38);
-    ctx.fillStyle = "#8b95a4";
-    ctx.fillText(`誤差 ${s.odom_err.toFixed(3)} m`, w - 10, 54);
-  }
 }
 
-/* 在路徑視圖裡畫一台車。st 給 null 就只畫輪廓（里程計推算的位置用虛線），
-   給了狀態就連四個輪子的真實朝向一起畫。 */
-function drawBody(ctx, w2s, S, wx, wy, yaw, col, st) {
+/* 在路徑視圖裡畫車體：輪廓 + 車頭 + 四個輪子的真實朝向 */
+function drawBody(ctx, w2s, S, st) {
+  const [wx, wy, yaw] = st.pose;
   const hx = CFG.wheelbase * 0.62, hy = CFG.track * 0.62;
   const cs = Math.cos(yaw), sn = Math.sin(yaw);
   const b2w = (bx, by) => [wx + bx * cs - by * sn, wy + bx * sn + by * cs];
 
-  ctx.strokeStyle = col;
+  ctx.strokeStyle = "#4ec97a";
   ctx.lineWidth = 2;
-  ctx.setLineDash(st ? [] : [4, 3]);
   ctx.beginPath();
   const c = [[hx, hy], [hx, -hy], [-hx, -hy], [-hx, hy]];
   ctx.moveTo(...w2s(...b2w(...c[0])));
@@ -550,8 +526,6 @@ function drawBody(ctx, w2s, S, wx, wy, yaw, col, st) {
   ctx.moveTo(...w2s(...b2w(hx, 0)));
   ctx.lineTo(...w2s(...b2w(hx * 1.35, 0)));
   ctx.stroke();
-  ctx.setLineDash([]);
-  if (!st) return;
 
   // 四個輪子畫在真實朝向上，顏色是輪速方向
   const L = 0.05;
@@ -749,16 +723,10 @@ $("home").addEventListener("click", () => {
 $("mode").addEventListener("click", () => {
   view = view === "chassis" ? "world" : "chassis";
   $("mode").textContent = view === "chassis" ? "路徑" : "底盤";
-  for (const id of ["clr", "odom"]) $(id).classList.toggle("hide", view !== "world");
+  $("clr").classList.toggle("hide", view !== "world");
 });
 
 $("clr").addEventListener("click", clearTrail);
-
-// 預設只畫真實軌跡，要看里程計飄多少再自己疊上去
-$("odom").addEventListener("click", () => {
-  showOdom = !showOdom;
-  $("odom").classList.toggle("on", showOdom);
-});
 
 // 防止雙指縮放與長按選字打斷操作
 document.addEventListener("gesturestart", e => e.preventDefault());

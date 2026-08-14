@@ -78,11 +78,30 @@ def parse_python(path):
     return out
 
 
+"""韌體原始碼在不在？
+
+sim/ 可以單獨推到公開 repo 掛 GitHub Pages（見 README 附錄），那邊只有這個
+目錄、沒有 ../Esp32_wheel 與 ../esp32_rad。這支是唯一要讀韌體 .h 的測試，
+所以在那種環境下 skip 掉，而不是報失敗。
+
+只有**部分**檔案找不到則是另一回事 —— 那代表 repo 真的不完整或檔案被改名，
+照樣要失敗。
+"""
+missing = [str(p) for p in FW_FILES.values() if not p.exists()]
+if len(missing) == len(FW_FILES):
+    print("\n[skip] 找不到韌體原始碼，這裡應該是只有 sim/ 的公開 repo。")
+    print("       這支測試要讀 ../Esp32_wheel 與 ../esp32_rad 底下的 .h 比對參數，")
+    print("       要在完整的 swerve-esp32 repo 底下才跑得起來。")
+    print("       其他六支測試不需要韌體原始碼，照樣可以跑。")
+    sys.exit(0)
+if missing:
+    print("\n找不到這些韌體檔案（repo 不完整，或者檔案被改名了）：")
+    for m in missing:
+        print("   - " + m)
+    sys.exit(1)
+
 fw = {}
 for fname, path in FW_FILES.items():
-    if not path.exists():
-        print(f"  [FAIL] 找不到 {path}")
-        sys.exit(1)
     for k, v in parse_defines(path).items():
         fw.setdefault(k, []).append((fname, v))
 sim = parse_python(SIM_FILE)

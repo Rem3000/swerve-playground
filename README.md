@@ -35,17 +35,20 @@ python -m http.server    # 要改 web/ 的話：在 sim/ 底下跑，然後開 /
 | `test_estop.py` | 急停閂鎖與重新致能 |
 | `test_input.py` | 按鍵對應 |
 | `test_parity.py` | 這份模擬和韌體 C++ 是不是同一套公式 |
-| `test_params.py` | 散在韌體三個檔案的同一組參數有沒有走鐘 |
+| `test_params.py` | 參數和韌體對不對得上、彼此自不自洽 |
 
 前五支都建立在「sim 是韌體的 1:1 移植」這個前提上，後兩支就是驗那個前提 ——
 `test_parity.py` 拿 `ref_kinematics.py`（從 `SwerveKinematics.cpp` 獨立重譯、
-刻意不看 `swerve_model.py`）去對，`test_params.py` 直接讀 `.h` 檔比對常數。
-沒有 runner，就是各自獨立的腳本，全過印「全部通過」，有失敗 `sys.exit(1)`。
+刻意不看 `swerve_model.py`）去對；`test_params.py` 比對參數，另外還驗幾件
+光看 `swerve_model.py` 就該成立的事：keep-out 沒超過行程給的上限、回報頻率不慢於
+積分頻率、慢速逼近的 PWM 推得動馬達、減速比與 ticks/度 對得上。
 
-> `test_params.py` 是唯一需要韌體原始碼的一支。如果你手上是**只有 `sim/` 的公開
-> repo**（見附錄的 GitHub Pages 那節），它會印一行 `[skip]` 正常結束，不算失敗；
-> 其他六支不需要韌體原始碼，照樣能跑。反過來說，在完整的 repo 底下只缺其中幾個
-> `.h`，那就是真的有問題（檔案被改名或刪了），它照樣會失敗。
+七支都不需要韌體原始碼，`sim/` 單獨拿出來就跑得起來。沒有 runner，就是各自獨立
+的腳本，全過印「全部通過」，有失敗 `sys.exit(1)`。
+
+> `test_params.py` 裡的 `FIRMWARE` 表是韌體 `.h` 的**第二份拷貝**（每一列都標了
+> 來源檔案）。改韌體參數的時候，`swerve_model.py` 與那張表兩邊都要跟著改 ——
+> 不然這支只會告訴你「sim 和表一致」，而表本身已經過期了。
 
 ## 桌面版操作
 

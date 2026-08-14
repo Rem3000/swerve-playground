@@ -1,37 +1,26 @@
-"""參數同步測試：散在三個檔案的同一組物理參數有沒有走鐘？
+"""參數測試：模擬器的參數和韌體對得上嗎、彼此自洽嗎？
 
-同一組物理參數散在 swerve_config.h（主控）、steer_config.h（轉向板）、
-swerve_model.py（模擬器），改一處就要改另外兩處，否則模擬失去意義、
-或者兩塊板對行程的認知不一致直接打架。CLAUDE.md 有一整張表在講這件事，
-這支就是把那張表自動化。
+同一組物理參數散在三個地方 —— 主控韌體、轉向板韌體、這個模擬器。改一處就要改
+另外兩處，否則模擬失去意義、或者兩塊板對行程的認知不一致直接打架。
 
-這是唯一一支會去讀韌體原始碼的測試（純文字解析，不需要編譯器）。
+這支把韌體那一側的值**抄在下面的 FIRMWARE 表裡**，拿去對 swerve_model.py。
+不去讀韌體原始碼，所以 sim/ 單獨拿出來（例如公開的模擬器 repo）也跑得起來。
 
     python test_params.py
+
+⚠ 代價要講清楚：下面那張表是韌體 .h 的**第二份拷貝**。
+  改韌體的參數時，swerve_model.py 與這張表**兩邊都要跟著改**，不然這支測試
+  只會告訴你「sim 和這張表一致」，而那張表本身可能已經過期了。
+  來源檔案都標在每一列後面，對照時照著去找。
+
+  （原本這支是直接讀 ../Esp32_wheel 與 ../esp32_rad 的 .h 自動比對，不需要
+   第二份拷貝；改成寫死是為了讓只有 sim/ 的公開 repo 也能跑，不用讓訪客看到
+   一支莫名其妙 skip 掉的測試。要換回自動比對的話，把這支移到 sim/ 外面即可。）
 """
 
-import re
 import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-
-FW_FILES = {
-    "swerve_config.h": ROOT / "Esp32_wheel/include/swerve_config.h",
-    "steer_config.h": ROOT / "esp32_rad/include/steer_config.h",
-    "LimitBank.h": ROOT / "Esp32_wheel/lib/LimitBank/LimitBank.h",
-    "SteerModule.h": ROOT / "esp32_rad/lib/SteerModule/SteerModule.h",
-    "SwerveCan.h": ROOT / "shared/SwerveCan/SwerveCan.h",
-}
-SIM_FILE = ROOT / "sim/swerve_model.py"
-
-# 韌體名稱 -> sim 名稱（只列名字不一樣的）
-ALIAS = {
-    "STEER_PID_KP_DEF": "STEER_PID_KP",
-    "STEER_PID_KI_DEF": "STEER_PID_KI",
-    "STEER_PID_KD_DEF": "STEER_PID_KD",
-    "STEER_TICKS_PER_DEG": "STEER_TICKS_PER_DEG_NOMINAL",
-}
+import swerve_model as M
 
 fails = []
 
@@ -42,141 +31,131 @@ def check(cond, msg):
         fails.append(msg)
 
 
-def parse_defines(path):
-    """抓 #define NAME <純數字>，帶 f/u/l 後綴與行尾註解都吃得下"""
-    out = {}
-    pat = re.compile(r"^\s*#define\s+([A-Z_][A-Z0-9_]*)\s+"
-                     r"\(?\s*([-+]?\d+(?:\.\d+)?)\s*[fFuUlL]?\s*\)?\s*(?://.*|/\*.*)?$")
-    for line in path.read_text(encoding="utf-8").splitlines():
-        m = pat.match(line)
-        if m:
-            out[m.group(1)] = float(m.group(2))
-    return out
+# ---------------------------------------------------------------- 韌體那一側
+# (韌體名稱, sim 名稱或 None 表示同名, 值, 來源檔案)
+FIRMWARE = [
+    ("CHASSIS_TRACK_M",           None,             0.3,   "swerve_config.h"),
+    ("CHASSIS_WHEELBASE_M",       None,             0.3,   "swerve_config.h"),
+    ("ESTOP_BRAKE_UNTIL_MPS",     None,             0.05,  "swerve_config.h"),
+    ("ESTOP_CLEAR_DEBOUNCE_MS",   None,             50,    "swerve_config.h"),
+    ("ESTOP_LATCH",               None,             1,     "swerve_config.h"),
+    ("ESTOP_REARM_CMD_ZERO_MS",   None,             1000,  "swerve_config.h"),
+    ("ESTOP_TRIP_DEBOUNCE_MS",    None,             3,     "swerve_config.h"),
+    ("LIMIT_DEBOUNCE_MS",         None,             5,     "LimitBank.h"),
+    ("LIMIT_HEARTBEAT_MS",        None,             20,    "swerve_config.h"),
+    ("LIMIT_LATCH_REPEATS",       None,             3,     "LimitBank.h"),
+    ("LOOP_ODOM_HZ",              None,             100,   "swerve_config.h"),
+    ("MAX_ANGULAR_SPEED_RPS",     None,             2,     "swerve_config.h"),
+    ("MAX_LINEAR_SPEED_MPS",      None,             1,     "swerve_config.h"),
+    ("MAX_WHEEL_SPEED_MPS",       None,             1.1,   "swerve_config.h"),
+    ("STEER_ANGLE_MARGIN_DEG",    None,             3,     "swerve_config.h"),
+    ("STEER_ANGLE_MAX_DEG",       None,             270,   "swerve_config.h + steer_config.h"),
+    ("STEER_ANGLE_MIN_DEG",       None,             0,     "swerve_config.h + steer_config.h"),
+    ("STEER_ENCODER_PPR",         None,             13,    "steer_config.h"),
+    ("STEER_HOMING_PARK_DEG",     None,             135,   "steer_config.h"),
+    ("STEER_HOMING_PWM",          None,             320,   "steer_config.h"),
+    ("STEER_HOMING_REBOUND_DEG",  None,             4,     "steer_config.h"),
+    ("STEER_HOMING_SLOW_PWM",     None,             170,   "steer_config.h"),
+    ("STEER_HOMING_TIMEOUT_MS",   None,             20000, "steer_config.h"),
+    ("STEER_KEEPOUT_DEG",         None,             30,    "swerve_config.h"),
+    ("STEER_LIMIT_AGE_COMPENSATE", None,            1,     "SteerModule.h"),
+    ("STEER_MAX_PWM",             None,             800,   "steer_config.h"),
+    ("STEER_MEASURE_SPAN",        None,             1,     "steer_config.h"),
+    ("STEER_MIN_MOVE_PWM",        None,             120,   "steer_config.h"),
+    ("STEER_MOTOR_GEARBOX",       None,             71,    "steer_config.h"),
+    ("STEER_PID_KD_DEF",          "STEER_PID_KD",   1.5,   "steer_config.h"),
+    ("STEER_PID_KI_DEF",          "STEER_PID_KI",   0,     "steer_config.h"),
+    ("STEER_PID_KP_DEF",          "STEER_PID_KP",   25,    "steer_config.h"),
+    ("STEER_PWM_MAX",             None,             1023,  "SteerModule.h"),
+    ("STEER_REPORT_HZ",           "LOOP_REPORT_HZ", 100,   "steer_config.h"),
+    ("STEER_RING_STAGE",          None,             9,     "steer_config.h"),
+    ("STEER_SOFT_LIMIT_DEG",      None,             10,    "steer_config.h"),
+    ("STEER_SPAN_TOL_FRAC",       None,             0.25,  "steer_config.h"),
+    ("STEER_TOLERANCE_DEG",       None,             1.5,   "steer_config.h"),
+    ("WHEEL_DIAMETER_M",          None,             0.116, "swerve_config.h"),
+]
+
+# 安裝偏移角：韌體是四個 #define，sim 是一個 tuple
+FW_MOUNT_OFFSET = (-180.0, 90.0, -90.0, 0.0)  # STEER_MOUNT_OFFSET_FL/FR/RL/RR
+
+# 撞塊銷相對輪子朝向的角度差。韌體沒有這個常數（它不進任何運算），
+# 但它和量到的開關位置一起決定了上面那組 MOUNT_OFFSET，所以放在這裡當提醒。
+EXPECT_STRIKER_OFFSET = (90.0, 90.0, 90.0, 90.0)
 
 
-def parse_python(path):
-    """抓模組層級的 NAME = 數字 / True / False / (數字, ...)"""
-    out = {}
-    num = re.compile(r"^([A-Z_][A-Z0-9_]*)\s*=\s*([-+]?\d+(?:\.\d+)?)\s*(?:#.*)?$")
-    boo = re.compile(r"^([A-Z_][A-Z0-9_]*)\s*=\s*(True|False)\s*(?:#.*)?$")
-    tup = re.compile(r"^([A-Z_][A-Z0-9_]*)\s*=\s*\(([^)]*)\)\s*(?:#.*)?$")
-    for line in path.read_text(encoding="utf-8").splitlines():
-        m = num.match(line)
-        if m:
-            out[m.group(1)] = float(m.group(2))
-            continue
-        m = boo.match(line)
-        if m:
-            out[m.group(1)] = 1.0 if m.group(2) == "True" else 0.0
-            continue
-        m = tup.match(line)
-        if m:
-            try:
-                out[m.group(1)] = tuple(float(v) for v in m.group(2).split(","))
-            except ValueError:
-                pass
-    return out
+def sim_value(name):
+    return getattr(M, name, None)
 
-
-"""韌體原始碼在不在？
-
-sim/ 可以單獨推到公開 repo 掛 GitHub Pages（見 README 附錄），那邊只有這個
-目錄、沒有 ../Esp32_wheel 與 ../esp32_rad。這支是唯一要讀韌體 .h 的測試，
-所以在那種環境下 skip 掉，而不是報失敗。
-
-只有**部分**檔案找不到則是另一回事 —— 那代表 repo 真的不完整或檔案被改名，
-照樣要失敗。
-"""
-missing = [str(p) for p in FW_FILES.values() if not p.exists()]
-if len(missing) == len(FW_FILES):
-    print("\n[skip] 找不到韌體原始碼，這裡應該是只有 sim/ 的公開 repo。")
-    print("       這支測試要讀 ../Esp32_wheel 與 ../esp32_rad 底下的 .h 比對參數，")
-    print("       要在完整的 swerve-esp32 repo 底下才跑得起來。")
-    print("       其他六支測試不需要韌體原始碼，照樣可以跑。")
-    sys.exit(0)
-if missing:
-    print("\n找不到這些韌體檔案（repo 不完整，或者檔案被改名了）：")
-    for m in missing:
-        print("   - " + m)
-    sys.exit(1)
-
-fw = {}
-for fname, path in FW_FILES.items():
-    for k, v in parse_defines(path).items():
-        fw.setdefault(k, []).append((fname, v))
-sim = parse_python(SIM_FILE)
 
 # ---------------------------------------------------------------- 1
-print("\n[1] 韌體與 sim 的同名常數")
-mismatch = []
-n_checked = 0
-for k in sorted(fw):
-    sim_key = ALIAS.get(k, k)
-    if sim_key not in sim or isinstance(sim[sim_key], tuple):
+print("\n[1] 模擬器的參數 vs 韌體")
+bad = []
+for fw_name, sim_alias, fw_val, src in FIRMWARE:
+    sim_name = sim_alias or fw_name
+    v = sim_value(sim_name)
+    if v is None:
+        bad.append(f"{sim_name} 在 swerve_model.py 裡找不到（韌體 {fw_name} = {fw_val}，{src}）")
         continue
-    n_checked += 1
-    for fname, v in fw[k]:
-        if abs(v - sim[sim_key]) > 1e-9:
-            mismatch.append(f"{k}：{fname}={v} vs sim.{sim_key}={sim[sim_key]}")
-for m in mismatch:
-    print("         " + m)
-check(not mismatch, f"{n_checked} 個同名常數全部一致")
+    if isinstance(v, bool):
+        v = 1.0 if v else 0.0
+    if abs(float(v) - float(fw_val)) > 1e-9:
+        bad.append(f"{fw_name} = {fw_val}（{src}）但 sim.{sim_name} = {v}")
+for b in bad:
+    print("         " + b)
+check(not bad, f"{len(FIRMWARE)} 個參數和韌體一致")
 
 # ---------------------------------------------------------------- 2
-print("\n[2] 兩塊板都有的常數（不一致 = 兩塊板對行程的認知不同，會打架）")
-cross = []
-for k in sorted(fw):
-    if len(fw[k]) < 2:
-        continue
-    detail = "、".join(f"{n}={v}" for n, v in fw[k])
-    cross.append((k, {v for _, v in fw[k]}, detail))
-for k, vals, detail in cross:
-    print(f"         {k}：{detail}")
-bad = [k for k, vals, _ in cross if len(vals) > 1]
-check(not bad, f"{len(cross)} 個跨檔案常數全部一致")
+print("\n[2] 安裝偏移角")
+sim_off = tuple(M.MOUNT_OFFSET_DEG)
+print(f"         韌體 STEER_MOUNT_OFFSET_* {list(FW_MOUNT_OFFSET)}")
+print(f"         sim  MOUNT_OFFSET_DEG     {list(sim_off)}")
+check(len(sim_off) == 4 and
+      all(abs(a - b) < 1e-9 for a, b in zip(FW_MOUNT_OFFSET, sim_off)),
+      "安裝偏移角一致（填錯的話實車會朝斜的方向走）")
+
+sim_st = tuple(M.STRIKER_OFFSET_DEG)
+check(len(sim_st) == 4 and
+      all(abs(a - b) < 1e-9 for a, b in zip(EXPECT_STRIKER_OFFSET, sim_st)),
+      f"撞塊偏移 {list(sim_st)}（CAD 確認 +90，和開關位置一起決定了上面的偏移角）")
 
 # ---------------------------------------------------------------- 3
-print("\n[3] 安裝偏移角（韌體四個 #define vs sim 的 tuple）")
-fw_off = []
-for suffix in ("FL", "FR", "RL", "RR"):
-    key = f"STEER_MOUNT_OFFSET_{suffix}"
-    fw_off.append(fw[key][0][1] if key in fw else None)
-sim_off = sim.get("MOUNT_OFFSET_DEG")
-print(f"         韌體 {fw_off}")
-print(f"         sim  {list(sim_off) if sim_off else None}")
-check(sim_off is not None and len(sim_off) == 4 and
-      all(a is not None and abs(a - b) < 1e-9 for a, b in zip(fw_off, sim_off)),
-      "MOUNT_OFFSET 一致")
+print("\n[3] keep-out 沒有超過行程寬度給的上限")
+span = M.STEER_ANGLE_MAX_DEG - M.STEER_ANGLE_MIN_DEG
+usable = span - 2 * M.STEER_ANGLE_MARGIN_DEG
+ko_max = (usable - 180.0) / 2.0
+print(f"         可用行程 {usable:.0f}°，收緊後要 >= 180°，所以 keep-out <= {ko_max:.0f}°")
+check(M.STEER_KEEPOUT_DEG <= ko_max,
+      f"STEER_KEEPOUT_DEG = {M.STEER_KEEPOUT_DEG:.0f}° <= 上限 {ko_max:.0f}°"
+      "（超過的話某些方向兩個解都會被擋掉）")
 
 # ---------------------------------------------------------------- 4
-print("\n[4] keep-out 沒有超過行程寬度給的上限")
-span = fw["STEER_ANGLE_MAX_DEG"][0][1] - fw["STEER_ANGLE_MIN_DEG"][0][1]
-margin = fw["STEER_ANGLE_MARGIN_DEG"][0][1]
-usable = span - 2 * margin
-ko_max = (usable - 180.0) / 2.0
-ko = fw["STEER_KEEPOUT_DEG"][0][1]
-print(f"         可用行程 {usable:.0f}°，收緊後要 >= 180°，所以 keep-out <= {ko_max:.0f}°")
-check(ko <= ko_max, f"STEER_KEEPOUT_DEG = {ko:.0f}° <= 上限 {ko_max:.0f}°"
-                    "（超過的話某些方向兩個解都會被擋掉）")
-
-# ---------------------------------------------------------------- 5
-print("\n[5] 頻率相依鏈：回授不可以慢於積分")
-odom_hz = fw["LOOP_ODOM_HZ"][0][1]
-report_hz = fw.get("STEER_REPORT_HZ", [(None, None)])[0][1]
-print(f"         LOOP_ODOM_HZ={odom_hz:.0f}  STEER_REPORT_HZ={report_hz}")
-check(report_hz is not None and report_hz >= odom_hz,
-      f"STEER_REPORT_HZ ({report_hz}) >= LOOP_ODOM_HZ ({odom_hz:.0f})"
+print("\n[4] 頻率相依鏈：回授不可以慢於積分")
+print(f"         LOOP_ODOM_HZ={M.LOOP_ODOM_HZ:.0f}  LOOP_REPORT_HZ={M.LOOP_REPORT_HZ:.0f}")
+check(M.LOOP_REPORT_HZ >= M.LOOP_ODOM_HZ,
+      f"回報 {M.LOOP_REPORT_HZ:.0f} Hz >= 積分 {M.LOOP_ODOM_HZ:.0f} Hz"
       "（慢了只是拿同一筆資料重複積分）")
 
+# ---------------------------------------------------------------- 5
+print("\n[5] 慢速逼近的 PWM 要推得動馬達")
+print(f"         HOMING_PWM={M.STEER_HOMING_PWM:.0f}  SLOW_PWM={M.STEER_HOMING_SLOW_PWM:.0f}"
+      f"  MIN_MOVE_PWM={M.STEER_MIN_MOVE_PWM:.0f}")
+check(M.STEER_HOMING_SLOW_PWM == 0 or M.STEER_HOMING_SLOW_PWM > M.STEER_MIN_MOVE_PWM,
+      f"SLOW_PWM ({M.STEER_HOMING_SLOW_PWM:.0f}) > MIN_MOVE_PWM ({M.STEER_MIN_MOVE_PWM:.0f})，"
+      "否則二次逼近會卡住不動")
+check(M.STEER_HOMING_PWM > M.STEER_MIN_MOVE_PWM,
+      f"HOMING_PWM ({M.STEER_HOMING_PWM:.0f}) > MIN_MOVE_PWM ({M.STEER_MIN_MOVE_PWM:.0f})")
+
 # ---------------------------------------------------------------- 6
-print("\n[6] 慢速逼近的 PWM 要推得動馬達")
-slow = fw["STEER_HOMING_SLOW_PWM"][0][1]
-minmove = fw["STEER_MIN_MOVE_PWM"][0][1]
-homing = fw["STEER_HOMING_PWM"][0][1]
-print(f"         HOMING_PWM={homing:.0f}  SLOW_PWM={slow:.0f}  MIN_MOVE_PWM={minmove:.0f}")
-check(slow == 0 or slow > minmove,
-      f"SLOW_PWM ({slow:.0f}) > MIN_MOVE_PWM ({minmove:.0f})，否則二次逼近會卡住不動")
-check(homing > minmove, f"HOMING_PWM ({homing:.0f}) > MIN_MOVE_PWM ({minmove:.0f})")
+print("\n[6] 刻度：減速比與編碼器推出來的 ticks/度")
+tpd = M.STEER_ENCODER_PPR * 4.0 * M.STEER_MOTOR_GEARBOX * M.STEER_RING_STAGE / 360.0
+print(f"         PPR {M.STEER_ENCODER_PPR:.0f} x4 x 減速比 "
+      f"({M.STEER_MOTOR_GEARBOX:.0f} x {M.STEER_RING_STAGE:.1f}) / 360 "
+      f"= {tpd:.2f} ticks/度")
+check(abs(tpd - M.STEER_TICKS_PER_DEG_NOMINAL) < 1e-6,
+      f"和 STEER_TICKS_PER_DEG_NOMINAL ({M.STEER_TICKS_PER_DEG_NOMINAL:.2f}) 對得上")
+check(M.STEER_SPAN_TOL_FRAC > 0.0,
+      f"行程合理性檢查是開著的（容差 ±{M.STEER_SPAN_TOL_FRAC * 100:.0f}%）—— "
+      "減速比填錯一倍就是靠它攔下來")
 
 # ---------------------------------------------------------------- 總結
 print("\n" + "=" * 64)
@@ -184,5 +163,7 @@ if fails:
     print(f"失敗 {len(fails)} 項：")
     for f in fails:
         print("   - " + f)
+    print("\n注意：這支比對的是「sim vs 本檔案裡抄下來的韌體值」。")
+    print("      如果你剛改過韌體，要確認改的是 swerve_model.py 還是這張表。")
     sys.exit(1)
 print("全部通過")

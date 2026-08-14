@@ -24,7 +24,7 @@
 ```bash
 python swerve_sim.py     # 開 tkinter 視窗，數字鍵盤操控
 python test_limits.py    # 跑限位安全測試（其餘測試見下）
-cd web && python serve.py   # 手機版：印出區網網址，手機開那個網址
+python -m http.server    # 要改 web/ 的話：在 sim/ 底下跑，然後開 /web/
 ```
 
 ## 檔案
@@ -35,7 +35,6 @@ cd web && python serve.py   # 手機版：印出區網網址，手機開那個�
 | `swerve_sim.py` | tkinter 視窗（桌面版） |
 | `test_*.py` | 五支自動測試，見下一節 |
 | `web/index.html` | 手機版，瀏覽器裡用 Pyodide 跑 `swerve_model.py` |
-| `web/serve.py` | 把 `web/` 開成 HTTP 服務，讓手機連進來 |
 | `build_exe.py` | 把桌面版打包成單一 exe |
 | `web/make_qr.py` | 重產公開網址的 QR code（換網址才要跑） |
 

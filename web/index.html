@@ -6,9 +6,9 @@
   這一頁只負責畫面與觸控操作。模型一行都不改，所以韌體公式仍然只有一份，
   改 swerve_model.py 這一頁自動跟著變。
 
-  跑法（手機要跟電腦同一個 Wi-Fi）：
-      cd sim/web && python3 serve.py
-  然後用手機開它印出來的網址。
+  正式的網址是 GitHub Pages（sim/ 用 subtree push 上去，站台根目錄就是 sim/）。
+  本機要改這一頁的話，在 sim/ 底下起服務、開 /web/，結構才跟 Pages 一致：
+      cd sim && python3 -m http.server
 
   直接用 file:// 開會失敗 —— fetch 取不到 swerve_model.py（CORS）。
 -->
@@ -262,16 +262,18 @@ async function boot() {
 }
 
 async function fetchModel() {
-  // serve.py 會把 swerve_model.py 這條路由指到 sim/ 的正本；GitHub Pages 則是
-  // 在 CI 裡把正本複製進站台。第二個路徑留給「直接在 sim/ 起 http.server」的情況。
+  // 命中的其實都是第二條：站台根目錄是 sim/，正本就在上一層（GitHub Pages 是
+  // subtree push 上去的 sim/，本機是在 sim/ 起 http.server，兩邊結構一樣）。
+  // 第一條留給「只把 web/ 單獨搬出去、正本複製在旁邊」的情況，多一個 404 而已。
   for (const p of ["swerve_model.py", "../swerve_model.py"]) {
     try {
       const r = await fetch(p, { cache: "no-cache" });
       if (r.ok) return await r.text();
     } catch (e) { /* 換下一個路徑 */ }
   }
-  throw new Error("找不到 swerve_model.py。請用 sim/web/serve.py 啟動，"
-                + "不要直接用 file:// 開這個檔案。");
+  throw new Error("找不到 swerve_model.py。請在 sim/ 底下跑 "
+                + "`python -m http.server`，再開 /web/ —— "
+                + "不能直接用 file:// 開這個檔案。");
 }
 
 /* ------------------------------------------------------------------ 主迴圈 */

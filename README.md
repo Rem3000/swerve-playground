@@ -25,7 +25,8 @@ Esp32_wheel/lib/LimitBank + CAN 0x080                  ->  swerve_model.LimitLin
 | `test_input.py` | 數字鍵盤對應的自動測試 |
 | `build_exe.py` | 打包成單一 exe |
 | `web/index.html` | 手機版模擬（瀏覽器裡用 Pyodide 跑 `swerve_model.py`） |
-| `web/serve.py` | 把 `sim/` 開成 HTTP 服務，讓手機連進來 |
+| `web/serve.py` | 把 `web/` 開成 HTTP 服務，讓手機連進來 |
+| `web/make_qr.py` | 重新產生下面那張 QR code（換網址才要跑） |
 
 ## 跑起來
 
@@ -88,6 +89,21 @@ git subtree push --prefix=sim sim-public main
 branch `main` / `(root)`。網址會是 `https://<你>.github.io/<新 repo>/web/`。
 
 之後每次改完模擬器，在主 repo commit 完再跑一次同一行 `git subtree push` 就更新了。
+
+現場要分享給別人，直接讓對方掃這張：
+
+![手機模擬器](web/qr.png)
+
+<https://rem3000.github.io/swerve-playground/web/>
+
+`web/qr.png` 給 README 或簡報嵌入，`web/qr.svg` 是向量的，印大張不會糊。
+兩個檔都進版控，看 repo 的人不必自己裝 segno。換網址（自訂網域、改 repo 名）
+之後要重產：
+
+```bash
+pip install segno
+cd web && python make_qr.py
+```
 
 - `sim/.nojekyll` 是給 Pages 用的：不加的話 Jekyll 會插手處理檔案
 - 公開 repo 拿到的是 `sim/` 的全部（含測試與 tkinter 版），這些本來就沒有機密；

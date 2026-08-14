@@ -1,5 +1,7 @@
 # Swerve 底盤模擬器
 
+四輪獨立轉向底盤的模擬器，邏輯是從 ESP32 韌體 1:1 移植過來的，用來在上車前驗證
+運動學、限位安全與開機歸零 —— 撞壞微動開關就要拆車。
 
 ## 快速開始
 
@@ -7,7 +9,7 @@
 
 ```bash
 python swerve_sim.py     # 開 tkinter 視窗，數字鍵盤操控
-python test_limits.py    # 跑限位安全測試（其餘測試見下）
+python test_limits.py    # 限位安全測試，另外還有 test_model/homing/estop/input
 python -m http.server    # 要改 web/ 的話：在 sim/ 底下跑，然後開 /web/
 ```
 
@@ -17,12 +19,10 @@ python -m http.server    # 要改 web/ 的話：在 sim/ 底下跑，然後開 /
 |---|---|
 | `swerve_model.py` | 純邏輯，沒有 GUI。運動學 + 轉向板位置環 + 車體物理 |
 | `swerve_sim.py` | tkinter 視窗（桌面版） |
-| `test_*.py` | 五支自動測試，見下一節 |
+| `test_*.py` | 五支獨立測試：運動學、限位安全、開機歸零、急停、按鍵對應 |
 | `web/index.html` | 手機版，瀏覽器裡用 Pyodide 跑 `swerve_model.py` |
 | `build_exe.py` | 把桌面版打包成單一 exe |
 | `web/make_qr.py` | 重產公開網址的 QR code（換網址才要跑） |
-
-
 
 ## 桌面版操作
 

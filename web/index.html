@@ -47,10 +47,14 @@
   #state.bad{background:#3d1417;color:var(--red)}
   #vel{color:var(--dim);font:11px/1.35 ui-monospace,Menlo,Consolas,monospace;margin-left:auto;text-align:right}
 
-  /* ---------- 底盤視圖 ---------- */
+  /* ---------- 主視圖（底盤／路徑切換） ---------- */
   #viewwrap{flex:1 1 auto;min-height:0;position:relative;margin:0 8px;
             background:var(--panel);border:1px solid var(--edge);border-radius:10px;overflow:hidden}
   #view{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+  #viewbtns{position:absolute;top:6px;left:6px;display:flex;gap:6px}
+  #viewbtns button{flex:0 0 auto;font-size:12px;font-weight:600;padding:6px 12px;
+                   background:#1e242c;border-color:#39414d;opacity:.92}
+  #viewbtns button.hide{display:none}
 
   /* ---------- 模組讀值 ---------- */
   /* minmax(0,1fr) 而不是 1fr：等寬欄的最小寬度預設是內容寬度，
@@ -101,7 +105,13 @@
   <span id="vel"></span>
 </div>
 
-<div id="viewwrap"><canvas id="view"></canvas></div>
+<div id="viewwrap">
+  <canvas id="view"></canvas>
+  <div id="viewbtns">
+    <button id="mode">路徑</button>
+    <button id="clr" class="hide">清除軌跡</button>
+  </div>
+</div>
 
 <div id="mods"></div>
 
@@ -209,6 +219,7 @@ const DEG = Math.PI / 180;
 /* ---------------------------------------------------------------- 指令狀態 */
 const cmd = { vx: 0, vy: 0, wz: 0 };   // 由觸控填，單位是模型的 m/s 與 rad/s
 let scale = 0.6;                        // 速度倍率
+let view = "chassis";                   // 主視圖：chassis 底盤 / world 路徑
 let estop = false;
 let pad = { x: 0, y: 0, live: false };  // 搖桿位移（-1~1，畫面座標）
 let spin = { v: 0, live: false };       // 自轉條（-1~1）
@@ -269,11 +280,36 @@ function frame(now) {
   last = now;
   resolveCmd();
   const s = JSON.parse(pyStep(dt, cmd.vx, cmd.vy, cmd.wz, estop));
-  drawView(s);
+  pushTrail(s);
+  (view === "world" ? drawWorld : drawView)(s);
   drawPad();
   drawSpin();
   updateHud(s);
   requestAnimationFrame(frame);
+}
+
+/* ---------------------------------------------------------------- 軌跡累積
+   模型裡也有 true_trail / odom_trail，但那是給桌面版用的，每一幀把上千個點
+   序列化成 JSON 傳過來太浪費 —— 每幀本來就拿得到當下的 pose 與 odom，
+   在這邊自己累積就好。這是純顯示用的資料，不是韌體公式，不涉及那條
+   「模型只有一份」的規矩。 */
+const TRAIL_STEP_M = 0.01, TRAIL_MAX = 4000;
+const trail = { real: [], odom: [] };
+
+function pushTrail(s) {
+  const add = (arr, x, y) => {
+    const last = arr[arr.length - 1];
+    if (last && Math.hypot(x - last[0], y - last[1]) <= TRAIL_STEP_M) return;
+    arr.push([x, y]);
+    if (arr.length > TRAIL_MAX) arr.shift();
+  };
+  add(trail.real, s.pose[0], s.pose[1]);
+  add(trail.odom, s.odom[0], s.odom[1]);
+}
+
+function clearTrail() {
+  trail.real.length = 0;
+  trail.odom.length = 0;
 }
 
 function resolveCmd() {
@@ -402,6 +438,127 @@ function drawView(s) {
     ctx.beginPath();
     ctx.arc(cx + ax * len, cy + ay * len, 4, 0, 2 * Math.PI);
     ctx.fill();
+  }
+}
+
+/* -------------------------------------------------------------- 畫面：路徑
+   綠 = 車子真正走的軌跡，橘 = 里程計以為自己走的軌跡。
+   兩條分岔多遠，就是里程計飄掉多少 —— 這是這個視圖唯一想講的事。 */
+function drawWorld(s) {
+  const { ctx, w, h } = fitCanvas($("view"));
+  ctx.clearRect(0, 0, w, h);
+
+  // 手機上沒有滾輪可以縮放，改成把兩條軌跡與車子整個框進畫面
+  let x0 = s.pose[0], x1 = x0, y0 = s.pose[1], y1 = y0;
+  for (const arr of [trail.real, trail.odom]) {
+    for (const p of arr) {
+      if (p[0] < x0) x0 = p[0]; else if (p[0] > x1) x1 = p[0];
+      if (p[1] < y0) y0 = p[1]; else if (p[1] > y1) y1 = p[1];
+    }
+  }
+  const MARGIN = 0.35;                       // 車身一半再加一點留白
+  const S = Math.max(16, Math.min(300,
+    Math.min(w / (y1 - y0 + MARGIN * 2), h / (x1 - x0 + MARGIN * 2))));
+  const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+  const cx = w / 2, cy = h / 2;
+  // 世界 x 向前 -> 螢幕上方，y 向左 -> 螢幕左方
+  const w2s = (x, y) => [cx - (y - my) * S, cy - (x - mx) * S];
+
+  // 0.5 m 網格
+  const G = 0.5;
+  const gx0 = Math.floor((mx - h / 2 / S) / G) * G, gx1 = mx + h / 2 / S;
+  const gy0 = Math.floor((my - w / 2 / S) / G) * G, gy1 = my + w / 2 / S;
+  ctx.strokeStyle = "#232932";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let gx = gx0; gx <= gx1; gx += G) {
+    ctx.moveTo(...w2s(gx, gy0)); ctx.lineTo(...w2s(gx, gy1));
+  }
+  for (let gy = gy0; gy <= gy1; gy += G) {
+    ctx.moveTo(...w2s(gx0, gy)); ctx.lineTo(...w2s(gx1, gy));
+  }
+  ctx.stroke();
+
+  // 軌跡。點數會隨行走距離一直長，依縮放抽點 —— 螢幕上間距不到 2 px 的
+  // 點畫了也看不出差別，卻會讓每一幀都變慢
+  const keep = Math.max(1, Math.round(2 / (TRAIL_STEP_M * S)));
+  for (const [arr, col] of [[trail.real, "#4ec97a"], [trail.odom, "#e8a33d"]]) {
+    if (arr.length < 2) continue;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(...w2s(arr[0][0], arr[0][1]));
+    for (let i = keep; i < arr.length; i += keep) ctx.lineTo(...w2s(arr[i][0], arr[i][1]));
+    ctx.lineTo(...w2s(arr[arr.length - 1][0], arr[arr.length - 1][1]));
+    ctx.stroke();
+  }
+
+  drawBody(ctx, w2s, S, s.odom[0], s.odom[1], s.odom[2], "#e8a33d", null);
+  drawBody(ctx, w2s, S, s.pose[0], s.pose[1], s.pose[2], "#4ec97a", s);
+
+  // 比例尺
+  ctx.strokeStyle = "#8b95a4";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(14, h - 16); ctx.lineTo(14 + S * G, h - 16);
+  ctx.stroke();
+  ctx.fillStyle = "#8b95a4";
+  ctx.font = "11px ui-monospace,monospace";
+  ctx.textAlign = "left";
+  ctx.fillText(G + " m", 14, h - 22);
+
+  // 真實 vs 里程計
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#4ec97a";
+  ctx.fillText(`真實 ${s.pose[0].toFixed(2)} ${s.pose[1].toFixed(2)} `
+             + `${(s.pose[2] * 180 / Math.PI).toFixed(0)}°`, w - 10, 22);
+  ctx.fillStyle = "#e8a33d";
+  ctx.fillText(`里程 ${s.odom[0].toFixed(2)} ${s.odom[1].toFixed(2)} `
+             + `${(s.odom[2] * 180 / Math.PI).toFixed(0)}°`, w - 10, 38);
+  ctx.fillStyle = "#8b95a4";
+  ctx.fillText(`誤差 ${s.odom_err.toFixed(3)} m`, w - 10, 54);
+}
+
+/* 在路徑視圖裡畫一台車。st 給 null 就只畫輪廓（里程計推算的位置用虛線），
+   給了狀態就連四個輪子的真實朝向一起畫。 */
+function drawBody(ctx, w2s, S, wx, wy, yaw, col, st) {
+  const hx = CFG.wheelbase * 0.62, hy = CFG.track * 0.62;
+  const cs = Math.cos(yaw), sn = Math.sin(yaw);
+  const b2w = (bx, by) => [wx + bx * cs - by * sn, wy + bx * sn + by * cs];
+
+  ctx.strokeStyle = col;
+  ctx.lineWidth = 2;
+  ctx.setLineDash(st ? [] : [4, 3]);
+  ctx.beginPath();
+  const c = [[hx, hy], [hx, -hy], [-hx, -hy], [-hx, hy]];
+  ctx.moveTo(...w2s(...b2w(...c[0])));
+  for (let i = 1; i < 4; i++) ctx.lineTo(...w2s(...b2w(...c[i])));
+  ctx.closePath();
+  ctx.stroke();
+
+  // 車頭
+  ctx.beginPath();
+  ctx.moveTo(...w2s(...b2w(hx, 0)));
+  ctx.lineTo(...w2s(...b2w(hx * 1.35, 0)));
+  ctx.stroke();
+  ctx.setLineDash([]);
+  if (!st) return;
+
+  // 四個輪子畫在真實朝向上，顏色是輪速方向
+  const L = 0.05;
+  for (let i = 0; i < 4; i++) {
+    const m = CFG.mods[i], g = (st.mods[i].true + m.off) * DEG;
+    const a = b2w(m.x - Math.cos(g) * L, m.y - Math.sin(g) * L);
+    const b = b2w(m.x + Math.cos(g) * L, m.y + Math.sin(g) * L);
+    const spd = st.mods[i].spd;
+    ctx.strokeStyle = Math.abs(spd) < 1e-3 ? "#8b95a4" : spd > 0 ? "#4ec97a" : "#e5484d";
+    ctx.lineWidth = Math.max(3, S * 0.02);
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(...w2s(...a));
+    ctx.lineTo(...w2s(...b));
+    ctx.stroke();
+    ctx.lineCap = "butt";
   }
 }
 
@@ -571,8 +728,17 @@ $("scale").addEventListener("click", () => {
 
 $("home").addEventListener("click", () => {
   pad.x = pad.y = 0; spin.v = 0;
-  pyHome();
+  pyHome();     // 模型那邊會把 pose 與軌跡歸零，這邊也要跟著清
+  clearTrail();
 });
+
+$("mode").addEventListener("click", () => {
+  view = view === "chassis" ? "world" : "chassis";
+  $("mode").textContent = view === "chassis" ? "路徑" : "底盤";
+  $("clr").classList.toggle("hide", view !== "world");
+});
+
+$("clr").addEventListener("click", clearTrail);
 
 // 防止雙指縮放與長按選字打斷操作
 document.addEventListener("gesturestart", e => e.preventDefault());

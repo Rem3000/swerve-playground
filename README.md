@@ -24,6 +24,8 @@ Esp32_wheel/lib/LimitBank + CAN 0x080                  ->  swerve_model.LimitLin
 | `test_estop.py` | **急停測試**：閂鎖與重新致能的邏輯 |
 | `test_input.py` | 數字鍵盤對應的自動測試 |
 | `build_exe.py` | 打包成單一 exe |
+| `web/index.html` | 手機版模擬（瀏覽器裡用 Pyodide 跑 `swerve_model.py`） |
+| `web/serve.py` | 把 `sim/` 開成 HTTP 服務，讓手機連進來 |
 
 ## 跑起來
 
@@ -35,6 +37,56 @@ python test_homing.py    # 跑開機歸零測試
 python test_estop.py     # 跑急停測試
 python test_input.py     # 跑按鍵測試
 ```
+
+### 手機版
+
+```bash
+cd web && python serve.py     # 印出區網網址，手機開那個網址
+```
+
+網頁不是另一套模擬 —— 它用 Pyodide（瀏覽器裡的 CPython）**直接載入 `sim/swerve_model.py`
+正本**，一行都沒改寫，所以改模型手機那邊重新整理就跟著變，不會有第二份公式要同步。
+`index.html` 裡只有畫面與觸控，加上一小段把模型輸出打包成 JSON 的膠水。
+
+- 第一次開啟要從 CDN 抓 Pyodide（約 10 MB，之後瀏覽器會快取），**這一步需要網路**
+- 手機要跟電腦在同一個 Wi-Fi；連不上通常是防火牆，Windows 第一次跑要允許「私人網路」
+- 不能直接用 `file://` 開，`fetch` 會被 CORS 擋掉
+- 模擬跑在手機自己的瀏覽器裡，`serve.py` 只負責送檔案
+- `serve.py` 只開放 `web/` 底下白名單內的檔案，加上一條指向 `swerve_model.py`
+  正本的路由；`sim/` 其他東西（測試、tkinter 版）不會被送出去
+- 分頁切到背景時 `requestAnimationFrame` 會被瀏覽器暫停，模擬跟著停，切回來繼續
+
+操控：左邊搖桿平移（放開回中）、右邊橫條自轉、`×0.6` 切速度倍率、`重新歸零`
+真的跑一次歸零狀態機、`急停` 是閂鎖式（放開後還要零速一秒才解除，和韌體一樣）。
+畫面上的圓是每個模組的撞塊軌跡：灰色是能走的 270°、暗紅是到不了的 90° 死角、
+紅短線是兩顆微動開關、圓點是撞塊現在的位置（越接近開關越紅）、藍虛線是韌體
+下的目標角、粗線是輪子朝向（綠 = 正轉、紅 = 反轉）。
+
+桌面版 `swerve_sim.py` 的世界視圖、軌跡、里程計對照、掃描自檢還沒搬過去。
+
+### 讓 Wi-Fi 以外的人也連得到（GitHub Pages）
+
+`sim/` 這個目錄可以單獨推到一個**公開** repo 去掛 GitHub Pages，韌體、`pinout/`、
+`tools/` 全都留在原本的私有 repo 裡。用 `git subtree` 推，不要用複製的 ——
+複製出來的 `swerve_model.py` 遲早會跟正本分家，那正是這整套設計要避開的事。
+
+一次性設定（先在 GitHub 上開一個空的 public repo，不要勾 README）：
+
+```bash
+git remote add sim-public git@github.com:<你>/<新 repo>.git
+git subtree push --prefix=sim sim-public main
+```
+
+然後到新 repo 的 Settings → Pages，Source 選 `Deploy from a branch`、
+branch `main` / `(root)`。網址會是 `https://<你>.github.io/<新 repo>/web/`。
+
+之後每次改完模擬器，在主 repo commit 完再跑一次同一行 `git subtree push` 就更新了。
+
+- `sim/.nojekyll` 是給 Pages 用的：不加的話 Jekyll 會插手處理檔案
+- 公開 repo 拿到的是 `sim/` 的全部（含測試與 tkinter 版），這些本來就沒有機密；
+  真的只想給網頁的話就改推 `sim/web`，但那樣 `swerve_model.py` 要另外想辦法帶過去
+- Pages 上 `web/index.html` 會先試同目錄的 `swerve_model.py`（404），再抓
+  `../swerve_model.py`（repo 根目錄，命中）。多一個 404 請求，不影響功能
 
 ## 韌體看得到的 vs 物理真實的
 

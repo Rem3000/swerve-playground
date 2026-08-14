@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<!--
+  Swerve 手機模擬器
+  ============================================================================
+  把 sim/swerve_model.py **原封不動**丟進瀏覽器裡的 Python（Pyodide）執行，
+  這一頁只負責畫面與觸控操作。模型一行都不改，所以韌體公式仍然只有一份，
+  改 swerve_model.py 這一頁自動跟著變。
+
+  跑法（手機要跟電腦同一個 Wi-Fi）：
+      cd sim/web && python3 serve.py
+  然後用手機開它印出來的網址。
+
+  直接用 file:// 開會失敗 —— fetch 取不到 swerve_model.py（CORS）。
+-->
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0e1116">
+<title>Swerve 手機模擬器</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#171b21; --edge:#2b323c; --fg:#d7dde6; --dim:#8b95a4;
+    --green:#4ec97a; --orange:#e8a33d; --red:#e5484d; --accent:#4a9eff; --grey:#3a424e;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none}
+  body{
+    background:var(--bg);color:var(--fg);
+    font-family:-apple-system,"Noto Sans TC","Microsoft JhengHei",sans-serif;
+    display:flex;flex-direction:column;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    user-select:none;-webkit-user-select:none;
+  }
+
+  /* ---------- 狀態列 ---------- */
+  #bar{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:13px;flex:0 0 auto}
+  #state{font-weight:700;padding:3px 10px;border-radius:99px;background:var(--grey);white-space:nowrap}
+  #state.ok{background:#14351f;color:var(--green)}
+  #state.busy{background:#3a2c10;color:var(--orange)}
+  #state.bad{background:#3d1417;color:var(--red)}
+  #vel{color:var(--dim);font:11px/1.35 ui-monospace,Menlo,Consolas,monospace;margin-left:auto;text-align:right}
+
+  /* ---------- 底盤視圖 ---------- */
+  #viewwrap{flex:1 1 auto;min-height:0;position:relative;margin:0 8px;
+            background:var(--panel);border:1px solid var(--edge);border-radius:10px;overflow:hidden}
+  #view{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+
+  /* ---------- 模組讀值 ---------- */
+  #mods{flex:0 0 auto;display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:8px}
+  .m{background:var(--panel);border:1px solid var(--edge);border-radius:8px;padding:5px 4px;text-align:center}
+  .m b{display:block;font-size:11px;color:var(--dim);letter-spacing:.5px}
+  .m .a{display:block;font:600 15px/1.25 ui-monospace,Menlo,Consolas,monospace}
+  .m .c{display:block;font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;color:var(--dim);
+        white-space:nowrap}
+
+  /* ---------- 操控區 ---------- */
+  #ctrl{flex:0 0 auto;display:grid;grid-template-columns:1fr auto;gap:10px;padding:0 10px 10px;align-items:end}
+  #pad{width:100%;aspect-ratio:1;max-width:190px;touch-action:none;
+       background:var(--panel);border:1px solid var(--edge);border-radius:50%}
+  #side{display:flex;flex-direction:column;gap:8px;align-items:stretch;min-width:132px}
+  #spin{width:100%;height:56px;touch-action:none;
+        background:var(--panel);border:1px solid var(--edge);border-radius:10px}
+  .row{display:flex;gap:8px}
+  button{
+    flex:1;font-family:inherit;font-size:13px;font-weight:600;color:var(--fg);
+    background:var(--panel);border:1px solid var(--edge);border-radius:10px;
+    padding:10px 6px;touch-action:manipulation;
+  }
+  button:active{background:#222833}
+  #estop{background:#3d1417;border-color:#7a2226;color:#ff9ea1;font-size:15px;padding:14px 6px}
+  #estop.on{background:var(--red);color:#fff;border-color:#ff8a8d}
+  #scale{min-width:64px;flex:0 0 auto}
+
+  /* ---------- 載入畫面 ---------- */
+  #boot{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;
+        align-items:center;justify-content:center;gap:10px;z-index:9;padding:24px;text-align:center}
+  #boot .t{font-size:15px;font-weight:600}
+  #boot .s{font-size:12px;color:var(--dim);max-width:34ch;line-height:1.6}
+  #boot .s.err{color:var(--red)}
+</style>
+</head>
+<body>
+
+<div id="bar">
+  <span id="state" class="busy">載入中</span>
+  <span id="warn" style="font-size:12px;color:var(--orange)"></span>
+  <span id="vel"></span>
+</div>
+
+<div id="viewwrap"><canvas id="view"></canvas></div>
+
+<div id="mods"></div>
+
+<div id="ctrl">
+  <canvas id="pad"></canvas>
+  <div id="side">
+    <canvas id="spin"></canvas>
+    <div class="row">
+      <button id="home">重新歸零</button>
+      <button id="scale">×0.6</button>
+    </div>
+    <button id="estop">急停</button>
+  </div>
+</div>
+
+<div id="boot">
+  <div class="t">正在啟動 Python 模擬核心</div>
+  <div class="s" id="bootmsg">第一次開啟要下載 Pyodide（約 10 MB），之後瀏覽器會快取。</div>
+</div>
+
+<!-- ==========================================================================
+     膠水層：唯一在瀏覽器裡新增的 Python。只做「呼叫模型 + 打包成 JSON」，
+     不含任何運算邏輯，運算全在 swerve_model.py 裡。
+     ========================================================================== -->
+<script type="text/x-python" id="glue">
+import json
+import swerve_model as M
+
+bot = M.SwerveRobot()
+
+
+def static_json():
+    """開場只送一次的固定資料：模組座標、限位開關在車體上的角度等。"""
+    mods = []
+    for i in range(M.N):
+        sw_min, sw_max = M.switch_body_deg(i)
+        mods.append(dict(
+            name=M.NAMES[i],
+            x=bot.kin.module_x[i], y=bot.kin.module_y[i],
+            off=M.MOUNT_OFFSET_DEG[i], striker=M.STRIKER_OFFSET_DEG[i],
+            sw_min=sw_min, sw_max=sw_max,
+        ))
+    return json.dumps(dict(
+        mods=mods,
+        ang_min=M.STEER_ANGLE_MIN_DEG, ang_max=M.STEER_ANGLE_MAX_DEG,
+        margin=M.STEER_ANGLE_MARGIN_DEG, keepout=bot.kin.keepout_deg,
+        max_v=M.MAX_LINEAR_SPEED_MPS, max_w=M.MAX_ANGULAR_SPEED_RPS,
+        wheelbase=M.CHASSIS_WHEELBASE_M, track=M.CHASSIS_TRACK_M,
+    ))
+
+
+def step(dt, vx, vy, wz, estop):
+    """推進一幀。順序對齊 bot.cpp：先掃急停，再吃 /cmd_vel，最後跑迴圈。"""
+    bot.set_estop(bool(estop))
+    bot.set_cmd_vel(vx, vy, wz)
+    bot.step(dt)
+
+    mods = []
+    for m in bot.steer:
+        mods.append(dict(
+            true=m.true_deg,        # 物理真實角度（畫圖用）
+            enc=m.angle_deg,        # 韌體以為的角度（編碼器推算）
+            tgt=m.target_deg,
+            clr=m.limit_clearance_deg,
+            phase=M.HOMING_PHASE_NAME[m.phase],
+            soft=m.soft_limited,
+            hit=m.jammed,
+        ))
+    for i, m in enumerate(mods):
+        m['spd'] = bot.wheel_act_mps[i]
+
+    o = bot.kin.odom
+    return json.dumps(dict(
+        ready=bot.ready,
+        homing=not bot.homing_done,
+        fault=bot.homing_fault,
+        estop=bot.estop_latched,
+        braking=bot.estop_braking,
+        mods=mods,
+        vel=bot.true_vel,
+        pose=bot.true_pose,
+        odom=[o['x'], o['y'], o['yaw']],
+        odom_err=bot.odom_error(),
+        clr=bot.clearance_now(),
+        worst=bot.worst_clearance(),
+        hits=bot.total_switch_hits(),
+        hard=bot.total_hard_stop_hits(),
+    ))
+
+
+def home():
+    bot.start_homing()
+</script>
+
+<script>
+"use strict";
+
+// Pyodide 版本：換版只要改這一行（CDN 路徑同時決定 indexURL）
+const PYODIDE_VER = "0.28.3";
+const PYODIDE_URL = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VER}/full/`;
+
+const $ = id => document.getElementById(id);
+const DEG = Math.PI / 180;
+
+/* ---------------------------------------------------------------- 指令狀態 */
+const cmd = { vx: 0, vy: 0, wz: 0 };   // 由觸控填，單位是模型的 m/s 與 rad/s
+let scale = 0.6;                        // 速度倍率
+let estop = false;
+let pad = { x: 0, y: 0, live: false };  // 搖桿位移（-1~1，畫面座標）
+let spin = { v: 0, live: false };       // 自轉條（-1~1）
+
+/* ---------------------------------------------------------------- Python 側 */
+let py = null, pyStep = null, pyHome = null, CFG = null;
+
+async function boot() {
+  const msg = $("bootmsg");
+  try {
+    await new Promise((ok, no) => {
+      const s = document.createElement("script");
+      s.src = PYODIDE_URL + "pyodide.js";
+      s.onload = ok;
+      s.onerror = () => no(new Error("下載 Pyodide 失敗，這一頁需要網路"));
+      document.head.appendChild(s);
+    });
+
+    msg.textContent = "正在初始化 Python…";
+    py = await loadPyodide({ indexURL: PYODIDE_URL });
+
+    // 直接抓 repo 裡那一份模型，不複製、不改寫
+    msg.textContent = "正在載入 swerve_model.py…";
+    const src = await fetchModel();
+    py.FS.writeFile("swerve_model.py", src);
+
+    py.runPython($("glue").textContent);
+    pyStep = py.globals.get("step");
+    pyHome = py.globals.get("home");
+    CFG = JSON.parse(py.globals.get("static_json")());
+
+    buildModPanel();
+    $("boot").remove();
+    requestAnimationFrame(frame);
+  } catch (e) {
+    msg.className = "s err";
+    msg.textContent = e.message || String(e);
+  }
+}
+
+async function fetchModel() {
+  // serve.py 會把 swerve_model.py 這條路由指到 sim/ 的正本；GitHub Pages 則是
+  // 在 CI 裡把正本複製進站台。第二個路徑留給「直接在 sim/ 起 http.server」的情況。
+  for (const p of ["swerve_model.py", "../swerve_model.py"]) {
+    try {
+      const r = await fetch(p, { cache: "no-cache" });
+      if (r.ok) return await r.text();
+    } catch (e) { /* 換下一個路徑 */ }
+  }
+  throw new Error("找不到 swerve_model.py。請用 sim/web/serve.py 啟動，"
+                + "不要直接用 file:// 開這個檔案。");
+}
+
+/* ------------------------------------------------------------------ 主迴圈 */
+let last = 0;
+function frame(now) {
+  const dt = last ? Math.min((now - last) / 1000, 0.1) : 0;
+  last = now;
+  resolveCmd();
+  const s = JSON.parse(pyStep(dt, cmd.vx, cmd.vy, cmd.wz, estop));
+  drawView(s);
+  drawPad();
+  drawSpin();
+  updateHud(s);
+  requestAnimationFrame(frame);
+}
+
+function resolveCmd() {
+  // 搖桿：畫面上 = 車頭 = +vx；畫面左 = 車體 +y
+  let dx = pad.x, dy = pad.y;
+  const mag = Math.hypot(dx, dy);
+  if (mag > 1) { dx /= mag; dy /= mag; }      // 斜推不要比直推快
+  cmd.vx = -dy * CFG.max_v * scale;
+  cmd.vy = -dx * CFG.max_v * scale;
+  cmd.wz = -spin.v * CFG.max_w * scale;       // 條往右 = 順時針 = wz 負
+}
+
+/* -------------------------------------------------------------- 畫面：底盤 */
+function fitCanvas(c) {
+  const r = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== Math.round(w * r) || c.height !== Math.round(h * r)) {
+    c.width = Math.round(w * r);
+    c.height = Math.round(h * r);
+  }
+  const ctx = c.getContext("2d");
+  ctx.setTransform(r, 0, 0, r, 0, 0);
+  return { ctx, w, h };
+}
+
+// 車體角度（度，逆時針為正，0 = 車頭）-> canvas 弧度。
+// 車體 +x 畫在螢幕上方、+y 畫在螢幕左方。
+const bodyToCanvas = g => -(g + 90) * DEG;
+const bodyVec = g => [-Math.sin(g * DEG), -Math.cos(g * DEG)];
+
+function drawView(s) {
+  const { ctx, w, h } = fitCanvas($("view"));
+  ctx.clearRect(0, 0, w, h);
+
+  const cx = w / 2, cy = h / 2;
+  const hx = CFG.wheelbase / 2, hy = CFG.track / 2;
+  // 每個模組要畫出撞塊圓（半徑 rad），留白後決定 px/m
+  const S = Math.min(w / (2 * hy + 0.22), h / (2 * hx + 0.22));
+  const rad = Math.min(S * 0.085, 62);
+  const b2s = (bx, by) => [cx - by * S, cy - bx * S];
+
+  // 車體
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "#39414d";
+  ctx.beginPath();
+  ctx.rect(...b2s(hx, hy), 2 * hy * S, 2 * hx * S);
+  ctx.stroke();
+  // 車頭箭頭
+  ctx.strokeStyle = "#4ec97a";
+  ctx.beginPath();
+  ctx.moveTo(...b2s(hx, 0));
+  ctx.lineTo(...b2s(hx + 0.055, 0));
+  ctx.stroke();
+
+  for (let i = 0; i < 4; i++) {
+    const m = CFG.mods[i], st = s.mods[i];
+    const [mx, my] = b2s(m.x, m.y);
+
+    // 撞塊可走的 270°（灰）與到不了的 90° 死角（暗紅）
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = "#39414d";
+    ctx.beginPath();
+    ctx.arc(mx, my, rad, bodyToCanvas(m.sw_min), bodyToCanvas(m.sw_max), true);
+    ctx.stroke();
+    ctx.strokeStyle = "#4a1f22";
+    ctx.beginPath();
+    ctx.arc(mx, my, rad, bodyToCanvas(m.sw_max), bodyToCanvas(m.sw_min), true);
+    ctx.stroke();
+
+    // 兩顆微動開關
+    for (const sw of [m.sw_min, m.sw_max]) {
+      const [ux, uy] = bodyVec(sw);
+      ctx.strokeStyle = "#e5484d";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(mx + ux * (rad - 9), my + uy * (rad - 9));
+      ctx.lineTo(mx + ux * (rad + 7), my + uy * (rad + 7));
+      ctx.stroke();
+    }
+
+    // 撞塊現在的位置：顏色 = 離最近那顆開關的餘裕
+    const sk = st.true + m.off + m.striker;
+    const [kx, ky] = bodyVec(sk);
+    ctx.fillStyle = st.clr < 5 ? "#e5484d" : st.clr < 15 ? "#e8a33d" : "#4ec97a";
+    ctx.beginPath();
+    ctx.arc(mx + kx * rad, my + ky * rad, 5, 0, 2 * Math.PI);
+    ctx.fill();
+
+    // 目標角度（韌體想去哪）
+    const [tx, ty] = bodyVec(st.tgt + m.off);
+    ctx.strokeStyle = "#4a9eff";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(mx, my);
+    ctx.lineTo(mx + tx * rad * 0.9, my + ty * rad * 0.9);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 輪子：畫在真實朝向上，顏色是輪速方向
+    const [wx, wy] = bodyVec(st.true + m.off);
+    const L = rad * 0.72;
+    ctx.strokeStyle = Math.abs(st.spd) < 1e-3 ? "#8b95a4"
+                    : st.spd > 0 ? "#4ec97a" : "#e5484d";
+    ctx.lineWidth = 7;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(mx - wx * L, my - wy * L);
+    ctx.lineTo(mx + wx * L, my + wy * L);
+    ctx.stroke();
+    ctx.lineCap = "butt";
+  }
+
+  // 車體中心的指令向量
+  const v = Math.hypot(cmd.vx, cmd.vy);
+  if (v > 1e-3) {
+    const [ax, ay] = bodyVec(Math.atan2(cmd.vy, cmd.vx) / DEG);
+    const len = (v / CFG.max_v) * Math.min(w, h) * 0.3;
+    ctx.strokeStyle = "#e8a33d";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + ax * len, cy + ay * len);
+    ctx.stroke();
+    ctx.fillStyle = "#e8a33d";
+    ctx.beginPath();
+    ctx.arc(cx + ax * len, cy + ay * len, 4, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+}
+
+/* -------------------------------------------------------- 畫面：搖桿 / 自轉 */
+function drawPad() {
+  const { ctx, w, h } = fitCanvas($("pad"));
+  ctx.clearRect(0, 0, w, h);
+  const cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 6;
+  const knob = Math.max(12, R * 0.22);   // 把手半徑
+  const reach = R - knob;                // 推到底時把手還完整留在圓內
+
+  ctx.strokeStyle = "#2b323c";
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, 2 * Math.PI); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, R * 0.5, 0, 2 * Math.PI); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy);
+  ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R);
+  ctx.stroke();
+
+  ctx.fillStyle = "#5a6472";
+  ctx.font = "11px sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("前", cx, cy - R + 13);
+  ctx.fillText("後", cx, cy + R - 4);
+
+  let dx = pad.x, dy = pad.y;
+  const mag = Math.hypot(dx, dy);
+  if (mag > 1) { dx /= mag; dy /= mag; }
+  ctx.fillStyle = pad.live ? "#4a9eff" : "#3a424e";
+  ctx.beginPath();
+  ctx.arc(cx + dx * reach, cy + dy * reach, knob, 0, 2 * Math.PI);
+  ctx.fill();
+}
+
+function drawSpin() {
+  const { ctx, w, h } = fitCanvas($("spin"));
+  ctx.clearRect(0, 0, w, h);
+  const cy = h / 2, pad2 = 22;
+
+  ctx.strokeStyle = "#2b323c";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad2, cy); ctx.lineTo(w - pad2, cy);
+  ctx.moveTo(w / 2, cy - 10); ctx.lineTo(w / 2, cy + 10);
+  ctx.stroke();
+
+  ctx.fillStyle = "#5a6472";
+  ctx.font = "11px sans-serif";
+  ctx.textAlign = "left";  ctx.fillText("↺ 逆", 4, cy + 4);
+  ctx.textAlign = "right"; ctx.fillText("順 ↻", w - 4, cy + 4);
+
+  ctx.fillStyle = spin.live ? "#4a9eff" : "#3a424e";
+  ctx.beginPath();
+  ctx.arc(w / 2 + spin.v * (w / 2 - pad2), cy, 16, 0, 2 * Math.PI);
+  ctx.fill();
+}
+
+/* -------------------------------------------------------------------- HUD */
+function buildModPanel() {
+  $("mods").innerHTML = CFG.mods.map((m, i) =>
+    `<div class="m"><b>${m.name}</b>
+       <span class="a" id="ma${i}">—</span>
+       <span class="c" id="mc${i}">—</span></div>`).join("");
+}
+
+function updateHud(s) {
+  const st = $("state");
+  let cls = "ok", txt = "READY";
+  if (s.fault)        { cls = "bad";  txt = "歸零故障"; }
+  else if (s.homing)  { cls = "busy"; txt = "歸零中 " + s.mods[0].phase; }
+  else if (s.estop)   { cls = "bad";  txt = s.braking ? "急停 煞車中" : "急停 閂鎖"; }
+  st.className = cls;
+  st.textContent = txt;
+
+  const warn = [];
+  if (s.hard) warn.push(`頂到硬擋塊 ${s.hard}`);
+  else if (s.hits) warn.push(`壓到開關 ${s.hits}`);
+  if (s.estop && !s.homing) warn.push("放開後需零速 1 秒才解除");
+  $("warn").textContent = warn.join("　");
+
+  const v = s.vel;
+  $("vel").innerHTML =
+    `vx${v[0].toFixed(2)} vy${v[1].toFixed(2)} wz${v[2].toFixed(2)}<br>`
+    + `餘裕 ${s.clr.toFixed(1)}° 最差 ${s.worst.toFixed(1)}°`;
+
+  for (let i = 0; i < 4; i++) {
+    const m = s.mods[i];
+    $("ma" + i).textContent = m.true.toFixed(1) + "°";
+    $("ma" + i).style.color = m.hit ? "#e5484d" : m.soft ? "#e8a33d" : "#d7dde6";
+    $("mc" + i).textContent = "→" + m.tgt.toFixed(0) + "° 餘" + m.clr.toFixed(0) + "°";
+  }
+}
+
+/* ------------------------------------------------------------------ 觸控 */
+function bindPad(el, onMove, onEnd) {
+  let id = null;
+  const pos = e => {
+    const r = el.getBoundingClientRect();
+    return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+  };
+  el.addEventListener("pointerdown", e => {
+    if (id !== null) return;
+    id = e.pointerId;
+    el.setPointerCapture(id);
+    onMove(...pos(e));
+    e.preventDefault();
+  });
+  el.addEventListener("pointermove", e => {
+    if (e.pointerId !== id) return;
+    onMove(...pos(e));
+    e.preventDefault();
+  });
+  const up = e => {
+    if (e.pointerId !== id) return;
+    id = null;
+    onEnd();
+  };
+  el.addEventListener("pointerup", up);
+  el.addEventListener("pointercancel", up);
+}
+
+// 搖桿：放開回中（實車是搖桿式遙控，不放開就一直走）
+bindPad($("pad"),
+  (u, v) => { pad.x = (u - 0.5) * 2; pad.y = (v - 0.5) * 2; pad.live = true; },
+  () => { pad.x = pad.y = 0; pad.live = false; });
+
+// 自轉條：同樣放開回中
+bindPad($("spin"),
+  u => { spin.v = Math.max(-1, Math.min(1, (u - 0.5) * 2.2)); spin.live = true; },
+  () => { spin.v = 0; spin.live = false; });
+
+/* ------------------------------------------------------------------ 按鈕 */
+$("estop").addEventListener("click", () => {
+  estop = !estop;
+  $("estop").classList.toggle("on", estop);
+  $("estop").textContent = estop ? "急停中（再按放開）" : "急停";
+});
+
+$("scale").addEventListener("click", () => {
+  scale = scale === 0.6 ? 1.0 : scale === 1.0 ? 0.3 : 0.6;
+  $("scale").textContent = "×" + scale.toFixed(1);
+});
+
+$("home").addEventListener("click", () => {
+  pad.x = pad.y = 0; spin.v = 0;
+  pyHome();
+});
+
+// 防止雙指縮放與長按選字打斷操作
+document.addEventListener("gesturestart", e => e.preventDefault());
+document.addEventListener("contextmenu", e => e.preventDefault());
+
+boot();
+</script>
+</body>
+</html>

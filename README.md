@@ -1,21 +1,5 @@
 # Swerve 底盤模擬器
 
-四輪獨立轉向底盤的模擬器，程式邏輯是從韌體 **1:1 抄過來**的，不是另外寫一套：
-
-| 韌體 | 模擬器 |
-|---|---|
-| `Esp32_wheel/lib/SwerveKinematics/SwerveKinematics.cpp` | `swerve_model.SwerveKinematics` |
-| `esp32_rad/lib/SteerModule/SteerModule.cpp`（位置環） | `swerve_model.SteerBoardModule` |
-| `Esp32_wheel/src/bot.cpp`（`loop_bot_control`） | `swerve_model.SwerveRobot` |
-| `Esp32_wheel/lib/LimitBank` + CAN `0x080` | `swerve_model.LimitLink` |
-
-移植原則是「**連 bug 都照抄**」。改韌體公式時這邊要跟著改，否則模擬失去意義。
-
-它主要回答三個上車前沒辦法便宜驗證的問題：
-
-- **安裝偏移角**（四個模組朝內對稱裝）在逆運動學與里程計裡處理對了沒有
-- **微動開關會不會被撞壞** —— 撞壞就要拆車
-- **開機歸零**完之後，韌體以為的角度和真實角度差多少
 
 ## 快速開始
 
@@ -38,20 +22,7 @@ python -m http.server    # 要改 web/ 的話：在 sim/ 底下跑，然後開 /
 | `build_exe.py` | 把桌面版打包成單一 exe |
 | `web/make_qr.py` | 重產公開網址的 QR code（換網址才要跑） |
 
-## 測試
 
-沒有 runner，就是五支獨立腳本，全過印「全部通過」，有失敗 `sys.exit(1)`。
-
-| 腳本 | 守的是什麼 |
-|---|---|
-| `test_model.py` | 運動學：逆→正閉環、偏移角轉換、齒隙與取樣率對里程計的影響 |
-| `test_limits.py` | **限位安全**：任何操作都不可以壓到微動開關 |
-| `test_homing.py` | **開機歸零**：歸零後的角度精度、刻度校正、CAN 延遲補償 |
-| `test_estop.py` | **急停**：閂鎖、重新致能條件、去彈跳不對稱 |
-| `test_input.py` | 數字鍵盤對應 |
-
-> `test_input.py` 第 10 項在 Linux 上必然失敗（它把 Windows VK code 灌進 Tk 再讀
-> keysym），那是環境差異不是回歸。
 
 ## 桌面版操作
 

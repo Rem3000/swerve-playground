@@ -32,6 +32,8 @@
     font-family:-apple-system,"Noto Sans TC","Microsoft JhengHei",sans-serif;
     /* iOS 會自作主張放大直向頁面的字，關掉，不然讀值列會撐破版面 */
     -webkit-text-size-adjust:100%;text-size-adjust:100%;
+    /* 整頁都不捲動，把捲動／縮放手勢整個關掉，觸控才不會被 Safari 搶走 */
+    touch-action:none;
     display:flex;flex-direction:column;
     padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
     user-select:none;-webkit-user-select:none;
@@ -494,25 +496,34 @@ function updateHud(s) {
   }
 }
 
-/* ------------------------------------------------------------------ 觸控 */
+/* ------------------------------------------------------------------ 觸控
+   兩套事件都綁：
+     * Pointer Events —— 桌機滑鼠與大部分手機
+     * Touch Events   —— iOS 的保險絲。Safari 對「沒有註冊 touchstart 監聽器」
+                         的元素會讓自己的手勢辨識優先，pointer 序列一開始就被
+                         pointercancel 掉，實機上的症狀就是搖桿完全拉不動。
+                         監聽器本身（加上 preventDefault）就是在告訴 Safari
+                         這塊區域的觸控由頁面自己處理。
+   兩邊同時進來也沒關係：做的事一樣，重複寫同一個值，冪等。 */
 function bindPad(el, onMove, onEnd) {
   let id = null;
-  const pos = e => {
+  const at = (cx, cy) => {
     const r = el.getBoundingClientRect();
-    return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+    return [(cx - r.left) / r.width, (cy - r.top) / r.height];
   };
+
   el.addEventListener("pointerdown", e => {
     if (id !== null) return;
     id = e.pointerId;
     // 手指滑出元件外還要繼續追蹤。抓不到就算了（有些瀏覽器會丟例外），
     // 不能讓它把後面的 onMove 一起帶走，否則整個搖桿變成沒反應
     try { el.setPointerCapture(id); } catch (err) { /* 沒有 capture 也還能用 */ }
-    onMove(...pos(e));
+    onMove(...at(e.clientX, e.clientY));
     e.preventDefault();
   });
   el.addEventListener("pointermove", e => {
     if (e.pointerId !== id) return;
-    onMove(...pos(e));
+    onMove(...at(e.clientX, e.clientY));
     e.preventDefault();
   });
   const up = e => {
@@ -522,6 +533,18 @@ function bindPad(el, onMove, onEnd) {
   };
   el.addEventListener("pointerup", up);
   el.addEventListener("pointercancel", up);
+
+  // passive:false 是必要的 —— 預設 passive 的話 preventDefault 會被忽略，
+  // 手指一動就變成 Safari 在捲頁面而不是在推搖桿
+  const touch = e => {
+    const t = e.touches[0];
+    if (t) onMove(...at(t.clientX, t.clientY));
+    e.preventDefault();
+  };
+  el.addEventListener("touchstart", touch, { passive: false });
+  el.addEventListener("touchmove", touch, { passive: false });
+  el.addEventListener("touchend", e => { onEnd(); e.preventDefault(); }, { passive: false });
+  el.addEventListener("touchcancel", () => onEnd());
 }
 
 // 搖桿：放開回中（實車是搖桿式遙控，不放開就一直走）

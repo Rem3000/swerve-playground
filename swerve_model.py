@@ -24,8 +24,8 @@ NAMES = ("FL", "FR", "RL", "RR")
 
 # ------------------------------------------------------------------ 參數
 # 對應 Esp32_wheel/include/swerve_config.h
-CHASSIS_WHEELBASE_M = 0.300
-CHASSIS_TRACK_M = 0.300
+CHASSIS_WHEELBASE_M = 0.200
+CHASSIS_TRACK_M = 0.200
 # HB-116 輪轂馬達，8S 電池 + VESC 佔空比 71%，按電量末端設上限（見 swerve_config.h）
 WHEEL_DIAMETER_M = 0.116
 MAX_WHEEL_SPEED_MPS = 1.1
@@ -38,6 +38,36 @@ STEER_ANGLE_MARGIN_DEG = 3.0
 
 # 主動避開限位開關：挑解時把窗口收緊成 [3+30, 267-30]，硬性排除靠近開關的解
 STEER_KEEPOUT_DEG = 30.0
+
+# 換解遲滯：要換到另一組等價解（θ vs θ+180），它得比目前這組近上這麼多度。
+# 目前角度離兩個解各 90 度時兩者成本相等，指令抖一點就會讓贏家換人，而換人
+# 等於轉 180 度 + 驅動輪反轉。詳見 swerve_config.h。
+STEER_FLIP_HYSTERESIS_DEG = 30.0
+
+# ---------------------------------------------------------- 轉向到位閘門
+# 輪子還沒轉到位就給油會橫著刮地，車體被側向力推歪。餘弦補償在小誤差時
+# 幾乎不打折（差 10 度還給 98.5%），所以再加一道硬閘門。兩個門檻不同 = 遲滯。
+DRIVE_ALIGN_GATE_DEG = 8.0
+DRIVE_ALIGN_RELEASE_DEG = 4.0
+DRIVE_ALIGN_GATE_LINKED = True   # True = 任一顆沒到位就四顆全切
+
+# ------------------------------------------------------ 加減速斜率限制
+# /cmd_vel 是階躍的，直接餵給跑速度閉環的 VESC 就是全電流起步 / 全力煞車，
+# 車體會往後坐再往前點頭。限在**底盤速度**這一層，四顆才會等比例地一起長，
+# 運動方向全程不變形。急停 / 逾時 / 轉向板故障不走斜率，直接歸零。
+DRIVE_ACCEL_MPS2 = 1.0
+DRIVE_DECEL_MPS2 = 2.0
+DRIVE_ANG_ACCEL_RPS2 = 3.0
+DRIVE_ANG_DECEL_RPS2 = 6.0
+# 大角度變向要先停車再轉。輪胎橫著刮地的原因不是驅動輪在出力，是「車體還在
+# 往原方向跑，轉向卻已經開始甩」—— 動量不會因為斷油就消失。所以大變向時先
+# 凍結轉向目標，等實際輪速降到這個值以下才放行。0 = 關閉。詳見 swerve_config.h。
+DRIVE_REPOINT_SPEED_MPS = 0.05
+# 變向要大到幾度才值得把車停下來。和 DRIVE_ALIGN_GATE_DEG 是兩個不同的決策：
+# 那個是「誤差多大就不該再給油」，這個是「變向多大才值得整台車停下來重來」。
+# 停車的代價約一秒（減速+轉向+重新加速），共用同一個小門檻會讓手動操作
+# 一路停停走走。靠 θ/θ+180 兩個解，需要的轉角最多 90 度，所以範圍是 0~90。
+DRIVE_REPOINT_ANGLE_DEG = 60.0
 
 # 機械角度 0 度（撞塊壓住 0 度開關）時，輪子在車體座標下指向的方向。
 # FL 朝車尾、FR 朝左、RL 朝右、RR 朝車頭 —— 四個模組繞車體中心 90 度陣列的
@@ -85,11 +115,11 @@ def switch_body_deg(i):
             striker_body_deg(i, STEER_ANGLE_MAX_DEG))
 
 # 對應 esp32_rad/include/steer_config.h
-STEER_PID_KP = 25.0
+STEER_PID_KP = 110.0
 STEER_PID_KI = 0.0
-STEER_PID_KD = 1.5
+STEER_PID_KD = 6.0
 STEER_MAX_PWM = 800
-STEER_MIN_MOVE_PWM = 120
+STEER_MIN_MOVE_PWM = 45       # 2026-08-16 地板承重四顆同步實測，最差 38 加兩成餘裕
 STEER_TOLERANCE_DEG = 1.5
 STEER_PWM_MAX = 1023
 STEER_SOFT_LIMIT_DEG = 10.0   # 軟限位減速區
@@ -98,7 +128,7 @@ STEER_HOMING_PARK_DEG = 135.0 # 校正完停在行程正中間
 # MD36 P71 24V + 霍爾編碼盤 13 ppr，外加迴轉盤齒圈那一級
 STEER_ENCODER_PPR = 13.0
 STEER_MOTOR_GEARBOX = 71.0
-STEER_RING_STAGE = 9.0        # 齒圈 144 齒 / 小齒輪 16 齒（實車數過）
+STEER_RING_STAGE = 4.5        # 實車歸零量出來的（見 steer_config.h 的說明）
 STEER_GEAR_RATIO = STEER_MOTOR_GEARBOX * STEER_RING_STAGE
 # 韌體開機時用的「估算」刻度。歸零碰到第二顆開關後會用實測值覆寫掉。
 STEER_TICKS_PER_DEG_NOMINAL = STEER_ENCODER_PPR * 4.0 * STEER_GEAR_RATIO / 360.0
@@ -135,7 +165,8 @@ STEER_LIMIT_AGE_COMPENSATE = True
 # 只影響四顆驅動輪。轉向板是直流馬達、有自己獨立的急停迴路，所以急停期間
 # 轉向板照常收角度指令，只是速度被壓成零，輪子因此凍結在原地。
 ESTOP_LATCH = True                # 放開開關不會自動恢復
-ESTOP_REARM_CMD_ZERO_MS = 1000.0  # 放開後還要 /cmd_vel 維持零速這麼久
+ESTOP_REARM_REQUIRE_ZERO = False  # 解除前要不要先等 /cmd_vel 歸零（見下）
+ESTOP_REARM_CMD_ZERO_MS = 1000.0  # 上面為 True 時，放開後還要零速維持這麼久
 ESTOP_TRIP_DEBOUNCE_MS = 3.0      # 觸發要快
 ESTOP_CLEAR_DEBOUNCE_MS = 50.0    # 解除要慢
 ESTOP_BRAKE_UNTIL_MPS = 0.05
@@ -198,6 +229,8 @@ class SwerveKinematics:
         self.steer_max_deg = 270.0
         self.mount_offset_deg = [0.0] * N
         self.keepout_deg = 0.0
+        self.flip_hysteresis_deg = 0.0
+        self.last_flip = [0] * N
         self.last_angle_deg = [0.0] * N
         self.seeded = False
         self.odom = dict(x=0.0, y=0.0, yaw=0.0, vx=0.0, vy=0.0, wz=0.0)
@@ -229,6 +262,14 @@ class SwerveKinematics:
         max_keepout = (self.steer_max_deg - self.steer_min_deg - 180.0) * 0.5
         self.keepout_deg = min(self.keepout_deg, max(0.0, max_keepout))
 
+    def set_flip_hysteresis(self, deg):
+        """換到另一組等價解要「近上這麼多度」才算數（0 = 關閉）。
+
+        目前角度離兩個解各 90 度時兩者成本相等，指令抖一點就會讓贏家換人，
+        而換人 = 轉 180 度 + 驅動輪反轉。理由詳見 swerve_config.h。
+        """
+        self.flip_hysteresis_deg = max(0.0, deg)
+
     def limit_clearance_deg(self, local_deg):
         """某個機械角度離最近那顆限位開關還有幾度（用可用行程算）"""
         return min(local_deg - self.steer_min_deg, self.steer_max_deg - local_deg)
@@ -240,7 +281,7 @@ class SwerveKinematics:
         return global_deg - self.mount_offset_deg[i]
 
     # ------------------------------------------------------------ 角度求解
-    def resolve_angle(self, desired_local_deg, current_local_deg):
+    def resolve_angle(self, i, desired_local_deg, current_local_deg):
         """在行程限制下挑一個能指向 desired_local_deg 的機械角度。
 
         候選有兩組：desired（輪速為正）與 desired+180（輪速取負），
@@ -263,9 +304,14 @@ class SwerveKinematics:
                     if strict and self.limit_clearance_deg(a) < self.keepout_deg:
                         continue
                     cost = abs(a - current_local_deg)
+                    # 換解遲滯：加在「另一組」的成本上而不是減在原本那組，
+                    # 這樣兩組都找不到解時的行為完全不變
+                    if self.flip_hysteresis_deg > 0.0 and flip != self.last_flip[i]:
+                        cost += self.flip_hysteresis_deg
                     if best is None or cost < best[0]:
-                        best = (cost, a, sign)
+                        best = (cost, a, sign, flip)
             if best is not None:
+                self.last_flip[i] = best[3]
                 return best[1], best[2]
             if not strict:
                 break
@@ -305,7 +351,7 @@ class SwerveKinematics:
 
             # 車體座標 -> 機械座標，之後的行程比較全部在機械座標下做
             desired_local = self.global_to_local_deg(i, math.degrees(direction[i]))
-            r = self.resolve_angle(desired_local, current_angle_deg[i])
+            r = self.resolve_angle(i, desired_local, current_angle_deg[i])
             if r is None:
                 out.append((self.last_angle_deg[i], 0.0))
                 continue
@@ -313,6 +359,46 @@ class SwerveKinematics:
             angle_deg, sign = r
             out.append((angle_deg, mag[i] * sign))
             self.last_angle_deg[i] = angle_deg
+        return out
+
+    # -------------------------------------------------- 速度投影 / 模組速度
+    def module_speeds(self, vx, vy, wz):
+        """一個底盤速度會讓四個模組各自以多快移動（純量，恆為正）。
+
+        只看大小不看方向，用來回答「這個指令算不算還在動」。比直接看
+        |vx|、|vy| 好的地方是自轉（只有 wz）也算得進來。
+        """
+        out = []
+        for i in range(N):
+            vxi = vx - wz * self.module_y[i]
+            vyi = vy + wz * self.module_x[i]
+            out.append(math.hypot(vxi, vyi))
+        return out
+
+    def project_wheel_speeds(self, vx, vy, wz, angle_local_deg):
+        """把底盤速度投影到「四個模組已經被指定的方向」上，得到各輪線速度。
+
+        用途是把「角度怎麼決定」和「速度多大」徹底分開 —— 角度解取決於
+        vx:vy:wz 的比例，而斜率限制是各軸獨立的，過渡期間那個比例和上層指令
+        不一樣。把斜率限制後的速度餵回 inverse() 會算出不同的角度，輪子就會在
+        兩個解之間跳（實車症狀：轉向中再動搖桿會抽搐、斜走走不出來）。
+
+        所以角度一律用指令算，速度用這個函式投影。穩態時兩者平行，投影值就等於
+        速度大小。反向解（θ+180）不用特別處理，投影自然是負值。
+        """
+        out = []
+        peak = 0.0
+        for i in range(N):
+            vxi = vx - wz * self.module_y[i]
+            vyi = vy + wz * self.module_x[i]
+            a = math.radians(self.local_to_global_deg(i, angle_local_deg[i]))
+            s = vxi * math.cos(a) + vyi * math.sin(a)
+            out.append(s)
+            peak = max(peak, abs(s))
+        # 去飽和，和 inverse() 同一套
+        if peak > self.max_wheel_speed:
+            scale = self.max_wheel_speed / peak
+            out = [s * scale for s in out]
         return out
 
     # ------------------------------------------------------------ 正運動學
@@ -917,6 +1003,7 @@ class SwerveRobot:
         self.kin.set_steer_range(STEER_ANGLE_MIN_DEG, STEER_ANGLE_MAX_DEG, STEER_ANGLE_MARGIN_DEG)
         self.kin.set_mount_offsets(MOUNT_OFFSET_DEG)
         self.kin.set_limit_keepout(STEER_KEEPOUT_DEG)
+        self.kin.set_flip_hysteresis(STEER_FLIP_HYSTERESIS_DEG)
 
         # 物理真實偏移，預設等於設定值；改動它 = 模擬校正沒做準
         self.physical_offset_deg = list(MOUNT_OFFSET_DEG)
@@ -927,7 +1014,11 @@ class SwerveRobot:
         # 主控看到的「轉向板回報角度」，50 Hz 才更新一次
         self.reported_deg = [m.angle_deg for m in self.steer]
 
-        self.cmd = [0.0, 0.0, 0.0]          # vx, vy, wz
+        self.cmd = [0.0, 0.0, 0.0]          # vx, vy, wz（上層要的）
+        self.ramp = [0.0, 0.0, 0.0]         # 斜率限制後的，實際拿去算輪速的
+        self.align_gate_closed = [True] * N # 到位閘門的遲滯狀態，True = 這顆還沒到位
+        self.gate_stop = False              # 這一拍有沒有把底盤速度壓成零
+        self.repoint_wait = False           # 要大變向、但車還在跑，正在等它停
         self.target_deg = [m.angle_deg for m in self.steer]
         self.wheel_cmd_mps = [0.0] * N      # 主控算出來、經餘弦補償後送 VESC 的值
         self.wheel_act_mps = [0.0] * N      # VESC 實際輪速
@@ -986,13 +1077,33 @@ class SwerveRobot:
         if self.estop_latched and not self._estop_input and self._estop_rearm_ok(now):
             self.estop_latched = False
             self._estop_cmd_zero_since_ms = None
+            self._estop_clear_stale_cmd()
+
+    def _estop_clear_stale_cmd(self):
+        """解除的那一瞬間把急停前殘留的 /cmd_vel 作廢。
+
+        對應 bot.cpp 的 estop_clear_stale_cmd()。ESTOP_REARM_REQUIRE_ZERO=False
+        時這是唯一的暴衝防護：不清掉的話，急停前那筆「全速前進」在解除的
+        下一拍就會被拿去用，車子在手還在開關上的時候就衝出去了。
+
+        韌體那邊是把 cmd_last_ms 清成 0（讓 cmd_stale 成立），模擬沒有移植
+        /cmd_vel 逾時，所以直接把速度歸零——效果一樣：要重新下指令才會動。
+        """
+        self.cmd = [0.0, 0.0, 0.0]
 
     def _estop_rearm_ok(self, now):
         """開關已放開，還要 /cmd_vel 維持零速夠久才准恢復。
 
         沒有這一條的話，上層導航還在催全速時放開開關，車子會立刻再暴衝一次。
+
+        但實車上這一條讓手動操作幾乎不能用：teleop_twist_keyboard 按著方向鍵
+        是持續發非零的，一邊打開急停一邊想開車，每按一次就把計時歸零，結果是
+        「怎麼按都不動」。所以預設改成放開即解除，暴衝防護交給
+        _estop_clear_stale_cmd()。詳見 swerve_config.h 的 ESTOP_REARM_REQUIRE_ZERO。
         """
         if not ESTOP_LATCH:
+            return True
+        if not ESTOP_REARM_REQUIRE_ZERO:
             return True
 
         zero = all(abs(v) < 1e-3 for v in self.cmd)
@@ -1071,13 +1182,28 @@ class SwerveRobot:
         self._t_ms = 0.0
 
     # ------------------------------------------------- 主控控制迴圈
+    @staticmethod
+    def _slew_toward(cur, tgt, accel, decel, dt_s):
+        """1:1 對應 bot.cpp 的 slew_toward()。
+
+        「加速」= 不換號而且絕對值變大，其餘（含要反向）都算減速，所以要反向時
+        會先被拉到 0 再從 0 長出去，中間不會跳過零點。
+        """
+        speeding_up = (tgt * cur >= 0.0) and (abs(tgt) > abs(cur))
+        step = (accel if speeding_up else decel) * dt_s
+        d = tgt - cur
+        if abs(d) <= step:
+            return tgt
+        return cur + (step if d > 0.0 else -step)
+
     def _control_step(self, dt):
         vx, vy, wz = self.cmd
 
         # 轉向板還沒校正好就停車，對應 bot.cpp 的 steer_ready 判斷。
         # 轉向角度指令照送（讓輪子守住），只是速度歸零。
         # 急停走同一條路：速度歸零之後逆運動學會沿用上一次的角度，輪子自然凍結。
-        if not self.ready or self.estop_latched:
+        hard_stop = (not self.ready) or self.estop_latched
+        if hard_stop:
             vx = vy = wz = 0.0
 
         # ---- 轉向板剛歸零完成：把「上次角度」對齊它現在停的地方 ----
@@ -1089,14 +1215,70 @@ class SwerveRobot:
             self.kin.seed_angles(self.reported_deg)
         self._steer_ready_prev = self.ready
 
-        # ---- 逆運動學（用轉向板回報的角度挑最省力的解）----
+        # ---- 轉向到位閘門（對應 bot.cpp 的 1.6 步）----
+        # 用上一拍送出去的目標角度比，理由和韌體一樣：這一拍的目標要等逆運動學
+        # 才算得出來，而逆運動學的輸入又要先知道閘門開不開。差一拍可以忽略。
+        gate_any_closed = False
+        for i in range(N):
+            err = abs(self.target_deg[i] - self.reported_deg[i])
+            self.align_gate_closed[i] = (err > DRIVE_ALIGN_RELEASE_DEG
+                                         if self.align_gate_closed[i]
+                                         else err > DRIVE_ALIGN_GATE_DEG)
+            if self.align_gate_closed[i]:
+                gate_any_closed = True
+        # repoint_wait 是上一拍第 2.5 步留下來的：「要大變向，但車還在跑，先停」。
+        # 它和閘門一樣要把底盤速度壓成零，但原因不同 —— 閘門是「輪子還沒轉到位」，
+        # 它是「輪子還不可以開始轉」。
+        gate_or_repoint = (gate_any_closed if DRIVE_ALIGN_GATE_LINKED else False) \
+            or self.repoint_wait
+        self.gate_stop = gate_or_repoint
+
+        # ---- 加減速斜率限制（對應 bot.cpp 的 1.7 步）----
+        if hard_stop:
+            self.ramp = [0.0, 0.0, 0.0]     # 保護動作不走斜率，立刻歸零
+        else:
+            tvx, tvy, twz = (0.0, 0.0, 0.0) if self.gate_stop else (vx, vy, wz)
+            self.ramp[0] = self._slew_toward(self.ramp[0], tvx,
+                                             DRIVE_ACCEL_MPS2, DRIVE_DECEL_MPS2, dt)
+            self.ramp[1] = self._slew_toward(self.ramp[1], tvy,
+                                             DRIVE_ACCEL_MPS2, DRIVE_DECEL_MPS2, dt)
+            self.ramp[2] = self._slew_toward(self.ramp[2], twz,
+                                             DRIVE_ANG_ACCEL_RPS2, DRIVE_ANG_DECEL_RPS2, dt)
+
+        # ---- 逆運動學：角度**只**由上層指令決定 ----
+        # ⚠ 絕對不要把斜率限制後的 self.ramp 餵進 inverse()。角度解取決於
+        #   vx:vy:wz 的**比例**，而斜率限制是各軸獨立的，過渡期間那個比例和
+        #   指令不一樣 -> 「照 ramp 算的角度」和「照指令算的角度」是兩個不同的
+        #   值，閘門一開一關、ramp 在零與非零之間來回，目標角就會在兩者之間跳。
+        #   實車症狀（2026-08-16 回報）：穩態邊轉邊走正常，但**轉向還沒到位時**
+        #   再動搖桿就抽搐；斜走也走不出來 —— 各軸以相同絕對速率漲落會把合成
+        #   方向拉向較大的那一軸。
+        #   速度改由 project_wheel_speeds() 投影到這些角度上（見第 4 步）。
         states = self.kin.inverse(vx, vy, wz, self.reported_deg)
         # 防禦性夾限，對應 bot.cpp 裡送 CAN 之前的那一道
-        self.target_deg = [constrain(s[0],
-                                     STEER_ANGLE_MIN_DEG + STEER_ANGLE_MARGIN_DEG,
-                                     STEER_ANGLE_MAX_DEG - STEER_ANGLE_MARGIN_DEG)
-                           for s in states]
-        self.wheel_raw_mps = [s[1] for s in states]
+        desired_deg = [constrain(s[0],
+                                 STEER_ANGLE_MIN_DEG + STEER_ANGLE_MARGIN_DEG,
+                                 STEER_ANGLE_MAX_DEG - STEER_ANGLE_MARGIN_DEG)
+                       for s in states]
+
+        # ---- 大角度變向：先停車再轉（對應 bot.cpp 的 2.5 步）----
+        # 凍結期間 target_deg 維持不動，輪子守在「車體正在走的方向」上，完全不刮。
+        # 「還要轉多少」要比**輪子實際指的角度**，不是 target_deg。target_deg
+        # 平常每一拍都跟著 desired 更新，兩者的差其實是「這一拍方向變了多少」
+        # ——那是角速度不是總轉角，拿去比角度門檻會變成「搖桿推快一點就停車」。
+        pending_deg = max(abs(d - r) for d, r in zip(desired_deg, self.reported_deg))
+        # 「車停了沒」要看實際輪速不是指令（指令被閘門壓成零的下一拍就是 0，
+        # 但車體還在滑）。同時保底看斜率限制器的指令速度：VESC 回授掛掉時
+        # 實際輪速會一直是 0，這條保護會靜默失效。用模組速度向量的大小，
+        # 這樣自轉（只有 wz）也算得到。
+        fastest_mps = max([abs(v) for v in self.wheel_act_mps]
+                          + self.kin.module_speeds(*self.ramp))
+        if DRIVE_REPOINT_SPEED_MPS <= 0.0 or pending_deg <= DRIVE_REPOINT_ANGLE_DEG:
+            self.repoint_wait = False
+        else:
+            self.repoint_wait = fastest_mps > DRIVE_REPOINT_SPEED_MPS
+        if not self.repoint_wait:
+            self.target_deg = desired_deg
 
         # ---- 送轉向角度指令 ----
         # 轉向板只在 READY 狀態才會吃主控送來的角度（見 esp32_rad/src/main.cpp
@@ -1105,11 +1287,22 @@ class SwerveRobot:
             for i in range(N):
                 self.steer[i].set_target_deg(self.target_deg[i])
 
-        # ---- 餘弦補償：輪子還沒轉到位就按 cos(角度誤差) 打折 ----
+        # ---- 輪速：把斜率限制後的底盤速度投影到「實際送出去的目標角」上 ----
+        # 角度是上面照指令算的、和 ramp 無關，所以 ramp 怎麼變都不會動到角度。
+        # 用 target_deg（可能被「先停車再轉」凍結）而不是 desired_deg：凍結期間
+        # 投影出來就是「照原方向繼續滑行、同時減速」，正好是不刮地的那個行為。
+        self.wheel_raw_mps = self.kin.project_wheel_speeds(
+            self.ramp[0], self.ramp[1], self.ramp[2], self.target_deg)
+
+        # ---- 餘弦補償 + 到位閘門（對應 bot.cpp 的第 4 步）----
+        # 四顆連動模式下閘門已經在上面把底盤速度壓成零了，這裡不用再做；
+        # 只有「各切各的」模式才在這裡逐顆歸零。
         for i in range(N):
             err_rad = math.radians(self.target_deg[i] - self.reported_deg[i])
             k = math.cos(err_rad)
             if k < 0.0:
+                k = 0.0
+            if (not DRIVE_ALIGN_GATE_LINKED) and self.align_gate_closed[i]:
                 k = 0.0
             self.wheel_cmd_mps[i] = self.wheel_raw_mps[i] * k
 

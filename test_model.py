@@ -38,7 +38,7 @@ unreach = []
 for deg10 in range(-1800, 1801):
     g = deg10 / 10.0
     for i in range(N):
-        if k.resolve_angle(k.global_to_local_deg(i, g), 135.0) is None:
+        if k.resolve_angle(i, k.global_to_local_deg(i, g), 135.0) is None:
             unreach.append((NAMES[i], g))
 check(not unreach, f"3601 個方向 x 4 模組全部可達（不可達 {len(unreach)} 筆）")
 

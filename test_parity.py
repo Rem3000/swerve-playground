@@ -34,12 +34,14 @@ def make_pair():
     a.set_steer_range(M.STEER_ANGLE_MIN_DEG, M.STEER_ANGLE_MAX_DEG, M.STEER_ANGLE_MARGIN_DEG)
     a.set_mount_offsets(M.MOUNT_OFFSET_DEG)
     a.set_limit_keepout(M.STEER_KEEPOUT_DEG)
+    a.set_flip_hysteresis(M.STEER_FLIP_HYSTERESIS_DEG)
 
     b = M.SwerveKinematics()
     b.set_chassis_param(M.CHASSIS_WHEELBASE_M, M.CHASSIS_TRACK_M, M.MAX_WHEEL_SPEED_MPS)
     b.set_steer_range(M.STEER_ANGLE_MIN_DEG, M.STEER_ANGLE_MAX_DEG, M.STEER_ANGLE_MARGIN_DEG)
     b.set_mount_offsets(M.MOUNT_OFFSET_DEG)
     b.set_limit_keepout(M.STEER_KEEPOUT_DEG)
+    b.set_flip_hysteresis(M.STEER_FLIP_HYSTERESIS_DEG)
     return a, b
 
 
@@ -74,8 +76,10 @@ N_CASE = 20000
 for _ in range(N_CASE):
     desired = random.uniform(-720.0, 720.0)
     current = random.uniform(-50.0, 320.0)
-    ra = a.resolve_angle(desired, current)      # (found, deg, sign)
-    rb = b.resolve_angle(desired, current)      # (deg, sign) 或 None
+    # 帶著模組索引：換解遲滯是有狀態的（last_flip），兩邊要走同一個索引
+    mi = random.randrange(M.N)
+    ra = a.resolve_angle(mi, desired, current)  # (found, deg, sign)
+    rb = b.resolve_angle(mi, desired, current)  # (deg, sign) 或 None
     if ra[0] != (rb is not None):
         found_mismatch += 1
         continue
@@ -85,6 +89,24 @@ for _ in range(N_CASE):
 check(found_mismatch == 0, f"「找不找得到解」一致（{N_CASE} 組，不一致 {found_mismatch} 組）")
 check(worst_deg <= TOL, f"解出來的機械角，差 {worst_deg:.1e}")
 check(worst_sign <= TOL, f"解出來的輪速正負，差 {worst_sign:.1e}")
+
+# ------------------------------------------------------- 2.5
+print("\n[2.5] project_wheel_speeds / module_speeds：隨機底盤速度 x 隨機角度")
+a, b = make_pair()
+worst_proj = worst_mod = 0.0
+for _ in range(N_CASE):
+    vx = random.uniform(-1.2, 1.2)
+    vy = random.uniform(-1.2, 1.2)
+    wz = random.uniform(-2.5, 2.5)
+    ang = [random.uniform(3.0, 267.0) for _ in range(M.N)]
+    pa = a.project_wheel_speeds(vx, vy, wz, ang)
+    pb = b.project_wheel_speeds(vx, vy, wz, ang)
+    worst_proj = max(worst_proj, max(abs(x - y) for x, y in zip(pa, pb)))
+    ma = a.module_speeds(vx, vy, wz)
+    mb = b.module_speeds(vx, vy, wz)
+    worst_mod = max(worst_mod, max(abs(x - y) for x, y in zip(ma, mb)))
+check(worst_proj <= TOL, f"投影出來的輪速，差 {worst_proj:.1e}")
+check(worst_mod <= TOL, f"模組速度大小，差 {worst_mod:.1e}")
 
 # ---------------------------------------------------------------- 3
 print("\n[3] inverse：隨機 cmd_vel x 隨機目前角（含零速走的那條捷徑）")

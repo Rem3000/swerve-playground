@@ -35,6 +35,8 @@ class RefKinematics:
         self.steer_max_deg = 270.0
         self.mount_offset_deg = [0.0] * SWERVE_N
         self.keepout_deg = 0.0
+        self.flip_hysteresis_deg = 0.0
+        self.last_flip = [0] * SWERVE_N
         self.last_angle_deg = [0.0] * SWERVE_N
         self.seeded = False
         self.odom = dict(x=0.0, y=0.0, yaw=0.0, vx=0.0, vy=0.0, wz=0.0)
@@ -86,13 +88,17 @@ class RefKinematics:
     def global_to_local_deg(self, i, global_deg):
         return global_deg - self.mount_offset_deg[i]
 
-    def resolve_angle(self, desired_local_deg, current_local_deg):
+    def set_flip_hysteresis(self, deg):
+        self.flip_hysteresis_deg = deg if deg > 0.0 else 0.0
+
+    def resolve_angle(self, i, desired_local_deg, current_local_deg):
         """回傳 (found, deg, sign)，對應 C++ 的 bool + 兩個 out 參數"""
         for p in range(2):
             strict = (p == 0) and (self.keepout_deg > 0.0)
             best_deg = 0.0
             best_sign = 1.0
             best_cost = 1e9
+            best_flip = 0
             found = False
             for flip in range(2):
                 base = desired_local_deg + (180.0 if flip else 0.0)
@@ -104,12 +110,17 @@ class RefKinematics:
                     if strict and self.limit_clearance_deg(a) < self.keepout_deg:
                         continue
                     cost = abs(a - current_local_deg)
+                    # 換解遲滯：加在「另一組」的成本上，兩組都找不到解時行為不變
+                    if self.flip_hysteresis_deg > 0.0 and flip != self.last_flip[i]:
+                        cost += self.flip_hysteresis_deg
                     if cost < best_cost:
                         best_cost = cost
                         best_deg = a
                         best_sign = sign
+                        best_flip = flip
                         found = True
             if found:
+                self.last_flip[i] = best_flip
                 return True, best_deg, best_sign
             if not strict:
                 break
@@ -147,12 +158,36 @@ class RefKinematics:
                 out.append((self.last_angle_deg[i], 0.0))
                 continue
             desired_local = self.global_to_local_deg(i, dirs[i] * RAD_TO_DEG)
-            ok, angle_deg, sign = self.resolve_angle(desired_local, current[i])
+            ok, angle_deg, sign = self.resolve_angle(i, desired_local, current[i])
             if not ok:
                 out.append((self.last_angle_deg[i], 0.0))
                 continue
             out.append((angle_deg, mag[i] * sign))
             self.last_angle_deg[i] = angle_deg
+        return out
+
+    def module_speeds(self, vx, vy, wz):
+        out = []
+        for i in range(SWERVE_N):
+            vxi = vx - wz * self.module_y[i]
+            vyi = vy + wz * self.module_x[i]
+            out.append(math.sqrt(vxi * vxi + vyi * vyi))
+        return out
+
+    def project_wheel_speeds(self, vx, vy, wz, angle_local_deg):
+        out = []
+        peak = 0.0
+        for i in range(SWERVE_N):
+            vxi = vx - wz * self.module_y[i]
+            vyi = vy + wz * self.module_x[i]
+            a = self.local_to_global_deg(i, angle_local_deg[i]) * DEG_TO_RAD
+            s = vxi * math.cos(a) + vyi * math.sin(a)
+            out.append(s)
+            if abs(s) > peak:
+                peak = abs(s)
+        if peak > self.max_wheel_speed:
+            scale = self.max_wheel_speed / peak
+            out = [x * scale for x in out]
         return out
 
     def forward(self, angle_deg, speed_mps):

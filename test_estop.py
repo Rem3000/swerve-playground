@@ -64,35 +64,57 @@ check(v < 0.01, "急停期間 /cmd_vel 完全無效")
 check(bot.estop_latched, "急停仍然閂鎖著")
 
 # ---------------------------------------------------------------- 3
-print("\n[3] 放開開關，但 /cmd_vel 還在催 -> 不可以自己恢復")
-# 這是最危險的情境：不閂鎖的話車子會在放開的瞬間立刻再暴衝一次
+print("\n[3] 放開開關 -> 馬上解除，但殘留的 /cmd_vel 不算數")
+# ESTOP_REARM_REQUIRE_ZERO=False 的行為。危險點沒有消失，只是換人擋：
+# 解除本身不再等 /cmd_vel 歸零（等零速在手動操作時會變成「怎麼按都不動」），
+# 改由「解除瞬間把急停前那筆指令作廢」來防止暴衝。
 bot.set_estop(False)
-run(bot, 3.0)  # 遠超過 ESTOP_REARM_CMD_ZERO_MS
+run(bot, 1.0)
 v = max(abs(v) for v in bot.wheel_act_mps)
-print(f"        放開 3 秒（cmd_vel 仍為全速），輪速 {v:.4f} m/s")
-check(bot.estop_latched, "cmd_vel 沒歸零就不解除閂鎖")
-check(v < 0.01, "車子沒有自己跑掉")
+print(f"        放開 1 秒（急停前是全速前進），輪速 {v:.4f} m/s")
+check(not bot.estop_latched, "放開就解除，不用等 /cmd_vel 歸零")
+check(v < 0.01, "殘留指令被作廢，車子沒有自己跑掉")
 
 # ---------------------------------------------------------------- 4
-print("\n[4] /cmd_vel 歸零並維持夠久之後才解除")
-bot.set_cmd_vel(0.0, 0.0, 0.0)
-half = M.ESTOP_REARM_CMD_ZERO_MS / 1000.0 * 0.5
-run(bot, half)
-print(f"        零速維持 {half:.2f} 秒（不足 "
-      f"{M.ESTOP_REARM_CMD_ZERO_MS / 1000.0:.2f} 秒）")
-check(bot.estop_latched, "時間不夠，還不解除")
-
-run(bot, M.ESTOP_REARM_CMD_ZERO_MS / 1000.0)
-print(f"        再等到超過 {M.ESTOP_REARM_CMD_ZERO_MS / 1000.0:.2f} 秒")
-check(not bot.estop_latched, "條件滿足，解除閂鎖")
-
-# ---------------------------------------------------------------- 5
-print("\n[5] 解除之後要能正常跑")
+print("\n[4] 解除後要有**新的** /cmd_vel 才會動")
 bot.set_cmd_vel(0.6, 0.0, 0.0)
 run(bot, 2.0)
 v = max(abs(v) for v in bot.wheel_act_mps)
 print(f"        重新下 0.6 m/s，輪速 {v:.3f} m/s")
 check(v > 0.3, "解除後恢復正常驅動")
+
+# ---------------------------------------------------------------- 5
+print("\n[5] 切回 ESTOP_REARM_REQUIRE_ZERO=True：要等零速才解除")
+# 這條路徑跑 nav2 時會用（上層不會因為有人按急停就停發 /cmd_vel），
+# config 隨時可以切回去，所以兩條路徑都要有測試守著
+_saved = M.ESTOP_REARM_REQUIRE_ZERO
+M.ESTOP_REARM_REQUIRE_ZERO = True
+try:
+    bot5 = make_running_bot()
+    bot5.set_estop(True)
+    run(bot5, 0.5)
+    check(bot5.estop_latched, "前置條件：已閂鎖")
+
+    bot5.set_estop(False)
+    bot5.set_cmd_vel(1.0, 0.0, 2.0)   # 上層還在催全速
+    run(bot5, 3.0)                    # 遠超過 ESTOP_REARM_CMD_ZERO_MS
+    v = max(abs(v) for v in bot5.wheel_act_mps)
+    print(f"        放開 3 秒但 cmd_vel 仍為全速，輪速 {v:.4f} m/s")
+    check(bot5.estop_latched, "cmd_vel 沒歸零就不解除閂鎖")
+    check(v < 0.01, "車子沒有自己跑掉")
+
+    bot5.set_cmd_vel(0.0, 0.0, 0.0)
+    half = M.ESTOP_REARM_CMD_ZERO_MS / 1000.0 * 0.5
+    run(bot5, half)
+    print(f"        零速維持 {half:.2f} 秒（不足 "
+          f"{M.ESTOP_REARM_CMD_ZERO_MS / 1000.0:.2f} 秒）")
+    check(bot5.estop_latched, "時間不夠，還不解除")
+
+    run(bot5, M.ESTOP_REARM_CMD_ZERO_MS / 1000.0)
+    print(f"        再等到超過 {M.ESTOP_REARM_CMD_ZERO_MS / 1000.0:.2f} 秒")
+    check(not bot5.estop_latched, "條件滿足，解除閂鎖")
+finally:
+    M.ESTOP_REARM_REQUIRE_ZERO = _saved
 
 # ---------------------------------------------------------------- 6
 print("\n[6] 急停期間轉向角度要凍結，不可以亂甩")
